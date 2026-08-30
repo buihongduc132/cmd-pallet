@@ -21,7 +21,7 @@ export const VERBS: Record<string, VerbDefinition> = {
   },
   run: {
     name: "run",
-    description: "Expand command template placeholders ($ARGUMENTS, $1..$9, $@)",
+    description: "Expand command template placeholders ($ARGUMENTS, $1..$9, $@) — prints expanded invocation; does not execute",
     usage: "cmd-pallet run <name> [args...] [--json]",
     acceptsJson: true,
   },
@@ -58,13 +58,53 @@ export const VERBS: Record<string, VerbDefinition> = {
 };
 
 export function getVerb(name: string): VerbDefinition | undefined {
-  throw new Error("not implemented: getVerb");
+  const lower = name.toLowerCase();
+  if (VERBS[lower]) return VERBS[lower];
+  for (const v of Object.values(VERBS)) {
+    if (v.aliases?.includes(lower)) return v;
+  }
+  return undefined;
 }
 
 export function formatHelp(): string {
-  throw new Error("not implemented: formatHelp");
+  const lines: string[] = [
+    "cmd-pallet — Unified CLI for slash command palettes across AI coding agents",
+    "",
+    "Usage:",
+    "  cmd-pallet <verb> [options]",
+    "",
+    "Verbs:",
+  ];
+
+  for (const verb of Object.values(VERBS)) {
+    const aliasInfo = verb.aliases ? ` (alias: ${verb.aliases.join(", ")})` : "";
+    lines.push(`  ${verb.name.padEnd(10)} ${verb.description}${aliasInfo}`);
+    lines.push(`             Usage: ${verb.usage}`);
+  }
+
+  lines.push("");
+  lines.push("Note on 'run':");
+  lines.push("  'run' prints expanded invocation ($ARGUMENTS, $1..$9, $@) and does not execute.");
+  lines.push("");
+  lines.push("Environment Variables:");
+  lines.push("  PI_CODING_AGENT_DIR   Override ~/.pi agent directory location for multi-stage isolation");
+  lines.push("  CMD_PALLET_CACHE_TTL  Discovery cache TTL in seconds (default: 0)");
+  lines.push("");
+  lines.push("Distinction:");
+  lines.push("  cmd-pallet provides unified headless CLI access across coding agents (Claude, OpenCode, Codex, Gemini).");
+  lines.push("  For interactive prompt/skill palette inside Pi TUI, see cmd-palette.");
+
+  return lines.join("\n");
 }
 
 export function formatHelpJson(): object {
-  throw new Error("not implemented: formatHelpJson");
+  return {
+    description: "cmd-pallet — Unified CLI for slash command palettes across AI coding agents",
+    verbs: VERBS,
+    env: {
+      PI_CODING_AGENT_DIR: "Override ~/.pi agent directory location for multi-stage isolation",
+      CMD_PALLET_CACHE_TTL: "Discovery cache TTL in seconds (default: 0)",
+    },
+    distinction: "cmd-pallet is standalone CLI; cmd-palette is interactive Pi TUI extension",
+  };
 }

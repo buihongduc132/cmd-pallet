@@ -2,13 +2,14 @@
  * cmd-pallet — CLI entry point and dispatcher
  */
 
+import { dispatch } from "./dispatch.ts";
 import type { IoStreams } from "./types.ts";
 
 export async function runCli(
   argv: string[],
   io?: IoStreams
 ): Promise<number> {
-  throw new Error("not implemented: runCli");
+  return dispatch(argv, io);
 }
 
 export async function main(): Promise<void> {
