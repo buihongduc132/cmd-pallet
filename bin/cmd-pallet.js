@@ -11,7 +11,10 @@ const hasStripTypes =
   (process.env.NODE_OPTIONS && process.env.NODE_OPTIONS.includes("strip-types"));
 
 if (hasStripTypes) {
-  await import("../src/cli.ts");
+  const { runCli } = await import("../src/cli.ts");
+  const exitCode = await runCli(process.argv.slice(2));
+  process.exitCode = exitCode;
+  process.exit(exitCode);
 } else {
   const nodeOptions = `${process.env.NODE_OPTIONS || ""} --experimental-strip-types --no-warnings=ExperimentalWarning`.trim();
   const env = { ...process.env, NODE_OPTIONS: nodeOptions };
@@ -23,5 +26,7 @@ if (hasStripTypes) {
       env,
     }
   );
-  process.exit(res.status ?? 0);
+  const exitCode = res.status ?? 0;
+  process.exitCode = exitCode;
+  process.exit(exitCode);
 }

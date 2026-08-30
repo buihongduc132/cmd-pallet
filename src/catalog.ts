@@ -93,32 +93,61 @@ export function slashMarkdown(cmd: ExternalCommand): string {
   return `---\nname: ${name}\ndescription: ${JSON.stringify(desc)}\n${hintLine}user-invocable: true\n---\n\n${cmd.content}\n`;
 }
 
+function matchesCommandName(cmdName: string, query: string): boolean {
+  const n = String(cmdName || "");
+  const nLower = n.toLowerCase();
+  const nDashed = grokCommandName(n);
+  const nUnderToDash = n.replace(/__/g, "-").toLowerCase();
+
+  const q = String(query || "").trim();
+  const qLower = q.toLowerCase();
+  const qDashed = grokCommandName(q);
+  const qUnderToDash = q.replace(/__/g, "-").toLowerCase();
+
+  return (
+    n === q ||
+    nLower === qLower ||
+    nDashed === qDashed ||
+    nUnderToDash === qUnderToDash ||
+    nUnderToDash === qLower ||
+    nLower === qUnderToDash
+  );
+}
+
 export function findCommand(
   commands: ExternalCommand[],
   name: string
 ): FindResult {
-  const raw = String(name || "").replace(/^\//, "").trim();
+  const raw = String(name || "").replace(/^\/+/, "").trim();
   if (!raw) return {};
 
-  const lower = raw.toLowerCase();
-  const dashed = grokCommandName(raw);
-  const rawUnderToDash = raw.replace(/__/g, "-").toLowerCase();
+  if (raw.includes(":")) {
+    const colonIdx = raw.indexOf(":");
+    const agentQualifier = raw.slice(0, colonIdx).trim().toLowerCase();
+    const cmdNameQuery = raw.slice(colonIdx + 1).trim();
 
-  const matches = commands.filter((c) => {
-    const n = String(c.name || "");
-    const nLower = n.toLowerCase();
-    const nDashed = grokCommandName(n);
-    const nUnderToDash = n.replace(/__/g, "-").toLowerCase();
+    const qualifiedMatches = commands.filter((c) => {
+      const cAgent = (c.source?.agent || "").toLowerCase();
+      return (
+        cAgent === agentQualifier &&
+        matchesCommandName(c.name, cmdNameQuery)
+      );
+    });
 
-    return (
-      n === raw ||
-      nLower === lower ||
-      nDashed === dashed ||
-      nUnderToDash === rawUnderToDash ||
-      nUnderToDash === lower ||
-      nLower === rawUnderToDash
-    );
-  });
+    if (qualifiedMatches.length === 1) {
+      return {
+        command: qualifiedMatches[0],
+      };
+    }
+    if (qualifiedMatches.length > 1) {
+      return {
+        ambiguous: true,
+        candidates: qualifiedMatches,
+      };
+    }
+  }
+
+  const matches = commands.filter((c) => matchesCommandName(c.name, raw));
 
   if (matches.length > 1) {
     return {

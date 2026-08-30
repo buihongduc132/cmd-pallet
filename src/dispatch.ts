@@ -113,6 +113,17 @@ export async function dispatch(
         commands = searchCommands(commands, query);
       }
 
+      const seenNames = new Set<string>();
+      const deduped: typeof commands = [];
+      for (const cmd of commands) {
+        const key = cmd.name.toLowerCase();
+        if (!seenNames.has(key)) {
+          seenNames.add(key);
+          deduped.push(cmd);
+        }
+      }
+      commands = deduped;
+
       if (commands.length === 0) {
         if (isJson) {
           stdout.write(JSON.stringify([], null, 2) + "\n");
