@@ -1,0 +1,31 @@
+{
+  "agents": {
+    "claude": {
+      "enabled": true,
+      "globalDir": null,
+      "projectDir": "tests/fixtures/catalog/claude/commands",
+      "recursive": true
+    },
+    "opencode": {
+      "enabled": true,
+      "globalDir": null,
+      "projectDir": "tests/fixtures/catalog/opencode/commands",
+      "recursive": true
+    },
+    "codex": {
+      "enabled": true,
+      "globalDir": null,
+      "projectDir": "tests/fixtures/catalog/codex/prompts",
+      "recursive": true
+    },
+    "gemini": {
+      "enabled": true,
+      "globalDir": null,
+      "projectDir": "tests/fixtures/catalog/gemini/commands",
+      "recursive": true
+    }
+  },
+  "custom": [],
+  "labelFormat": "[{scope}] ({agent}) | {description}",
+  "prefixFormat": "{agent}:{name}"
+}
