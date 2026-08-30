@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { runCli } from "../src/cli.ts";
 import { VERBS } from "../src/verbs.ts";
 import { createMockIo, FIXTURE_ROOT, withTempDir } from "./helpers.ts";
-import { writeFileSync, existsSync, readFileSync, readdirSync, utimesSync, statSync } from "node:fs";
+import { writeFileSync, existsSync, readFileSync, readdirSync, utimesSync, statSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 
 describe("CLI Dispatch", () => {
@@ -205,21 +205,64 @@ describe("CLI Dispatch", () => {
     });
 
     it("errors and exits with code 1 on slug name collisions", async () => {
-      await withTempDir(async (tmp) => {
-        // When two distinct commands resolve to the same grokCommandName slug (e.g. foo-bar vs foo/bar)
-        const exitCode = await runCli(["sync", tmp], io);
-        // Collision detection test
-        if (io.stderr.toString().includes("collision")) {
+      await withTempDir(async (tmpAgentDir) => {
+        const agentDir = join(tmpAgentDir, "agent");
+        const claudeDir = join(tmpAgentDir, "claude");
+        mkdirSync(agentDir, { recursive: true });
+        mkdirSync(claudeDir, { recursive: true });
+
+        // When two distinct commands resolve to the same grokCommandName slug (e.g. foo-bar vs foo.bar)
+        writeFileSync(join(claudeDir, "foo-bar.md"), "---\nname: foo-bar\n---\necho 1", "utf-8");
+        writeFileSync(join(claudeDir, "foo.bar.md"), "---\nname: foo.bar\n---\necho 2", "utf-8");
+
+        const config = {
+          agents: {
+            claude: { enabled: true, globalDir: claudeDir, recursive: true },
+          },
+          custom: [],
+        };
+        writeFileSync(join(agentDir, "unify-cmd.json"), JSON.stringify(config), "utf-8");
+
+        await withTempDir(async (outDir) => {
+          const syncIo = createMockIo({
+            cwd: tmpAgentDir,
+            env: { PI_CODING_AGENT_DIR: tmpAgentDir },
+          });
+          const exitCode = await runCli(["sync", outDir], syncIo);
           expect(exitCode).toBe(1);
-        }
+          expect(syncIo.stderr.toString()).toMatch(/collision/i);
+        });
       });
     });
 
     it("warns on stderr for skipped empty-name commands without incrementing synced count", async () => {
-      await withTempDir(async (tmp) => {
-        const exitCode = await runCli(["sync", tmp], io);
-        expect(exitCode).toBe(0);
-        // Stderr warning check if any command was skipped
+      await withTempDir(async (tmpAgentDir) => {
+        const agentDir = join(tmpAgentDir, "agent");
+        const claudeDir = join(tmpAgentDir, "claude");
+        mkdirSync(agentDir, { recursive: true });
+        mkdirSync(claudeDir, { recursive: true });
+
+        writeFileSync(join(claudeDir, "valid.md"), "---\nname: valid-cmd\n---\necho valid", "utf-8");
+        writeFileSync(join(claudeDir, "---.md"), "---\nname: ---\n---\necho empty", "utf-8");
+
+        const config = {
+          agents: {
+            claude: { enabled: true, globalDir: claudeDir, recursive: true },
+          },
+          custom: [],
+        };
+        writeFileSync(join(agentDir, "unify-cmd.json"), JSON.stringify(config), "utf-8");
+
+        await withTempDir(async (outDir) => {
+          const syncIo = createMockIo({
+            cwd: tmpAgentDir,
+            env: { PI_CODING_AGENT_DIR: tmpAgentDir },
+          });
+          const exitCode = await runCli(["sync", outDir], syncIo);
+          expect(exitCode).toBe(0);
+          expect(syncIo.stdout.toString()).toContain("synced=1");
+          expect(syncIo.stderr.toString()).toMatch(/skipped.*[1-9]|warn/i);
+        });
       });
     });
 
