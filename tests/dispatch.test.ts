@@ -307,12 +307,11 @@ describe("CLI Dispatch", () => {
       }
     });
 
-    it("documents environment variables (PI_CODING_AGENT_DIR, CMD_PALLET_CACHE_TTL)", async () => {
+    it("documents environment variables (PI_CODING_AGENT_DIR)", async () => {
       const exitCode = await runCli(["help"], io);
       expect(exitCode).toBe(0);
       const out = io.stdout.toString();
       expect(out).toContain("PI_CODING_AGENT_DIR");
-      expect(out).toContain("CMD_PALLET_CACHE_TTL");
     });
 
     it("states clearly that 'run' prints expanded invocation and does not execute", async () => {

@@ -5,7 +5,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { grokCommandName, loadCatalog, slashMarkdown } from "./catalog.ts";
-import type { SyncOptions, SyncResult } from "./types.ts";
+import type { ExternalCommand, SyncOptions, SyncResult } from "./types.ts";
 
 export async function syncSlashCommands(
   outDir: string,
@@ -27,30 +27,54 @@ export async function syncSlashCommands(
     mkdirSync(outDir, { recursive: true });
   }
 
-  const writtenFiles: string[] = [];
-  const writtenNames = new Set<string>();
-  const seenOriginalNames = new Map<string, string>();
+  const validCommands: ExternalCommand[] = [];
   let skipped = 0;
 
   for (const cmd of commands) {
     const slug = grokCommandName(cmd.name);
     if (!slug) {
-      process.stderr.write(`[warn] Skipped command with invalid name: "${cmd.name}"\n`);
+      options?.stderr?.write(`[warn] Skipped command with invalid name: "${cmd.name}"\n`);
       skipped++;
       continue;
     }
+    validCommands.push(cmd);
+  }
 
-    if (writtenNames.has(slug)) {
-      const prev = seenOriginalNames.get(slug);
-      if (prev && prev !== cmd.name) {
-        throw new Error(`Slug collision detected: commands "${prev}" and "${cmd.name}" both resolve to slug "${slug}"`);
+  // Check slug collisions
+  const slugMap = new Map<string, ExternalCommand[]>();
+  for (const cmd of validCommands) {
+    const slug = grokCommandName(cmd.name);
+    const list = slugMap.get(slug) || [];
+    list.push(cmd);
+    slugMap.set(slug, list);
+  }
+
+  for (const [slug, list] of slugMap.entries()) {
+    if (list.length > 1) {
+      const seenAgents = new Set<string>();
+      for (const cmd of list) {
+        const agent = (cmd.source?.agent || "unknown").toLowerCase();
+        if (seenAgents.has(agent)) {
+          throw new Error(`Slug collision detected: multiple commands in agent "${agent}" resolve to slug "${slug}"`);
+        }
+        seenAgents.add(agent);
       }
     }
+  }
 
-    writtenNames.add(slug);
-    seenOriginalNames.set(slug, cmd.name);
+  const writtenFiles: string[] = [];
+  const writtenStems = new Set<string>();
 
-    const filePath = join(outDir, `${slug}.md`);
+  for (const cmd of validCommands) {
+    const slug = grokCommandName(cmd.name);
+    const isColliding = (slugMap.get(slug)?.length || 0) > 1;
+    const fileName = isColliding
+      ? `${cmd.source?.agent || "agent"}-${slug}.md`
+      : `${slug}.md`;
+    const stem = basename(fileName, ".md");
+    writtenStems.add(stem);
+
+    const filePath = join(outDir, fileName);
     const content = slashMarkdown(cmd);
 
     if (!isDryRun) {
@@ -82,7 +106,7 @@ export async function syncSlashCommands(
       for (const entry of entries) {
         if (entry.endsWith(".md")) {
           const stem = basename(entry, ".md");
-          if (!writtenNames.has(stem)) {
+          if (!writtenStems.has(stem)) {
             const stalePath = join(outDir, entry);
             rmSync(stalePath, { force: true });
             removed.push(stalePath);

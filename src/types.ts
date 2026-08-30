@@ -43,6 +43,7 @@ export interface ParsedArgs {
 export interface SyncOptions {
   dryRun?: boolean;
   commands?: ExternalCommand[];
+  stderr?: { write: (s: string) => void };
 }
 
 export interface SyncResult {

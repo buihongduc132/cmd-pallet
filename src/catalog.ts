@@ -190,13 +190,6 @@ function deepMerge(
   return out;
 }
 
-export function discoverCommands(
-  config: unknown,
-  cwd: string
-): ExternalCommand[] {
-  throw new Error("Use loadCatalog for command discovery");
-}
-
 export async function loadCatalog(
   cwd?: string,
   options?: CatalogOptions
@@ -205,8 +198,7 @@ export async function loadCatalog(
 
   const agentBaseDir = options?.agentDir ?? process.env.PI_CODING_AGENT_DIR;
 
-  let globalConfigPath: string;
-  let resolvedConfigPath: string;
+  let globalFoundPath: string | null = null;
 
   if (agentBaseDir) {
     if (!existsSync(agentBaseDir)) {
@@ -219,12 +211,14 @@ export async function loadCatalog(
       join(agentBaseDir, ".unify-cmd.json"),
     ];
 
-    const found = candidates.find((p) => existsSync(p));
-    globalConfigPath = found || join(agentBaseDir, "agent", "unify-cmd.json");
-    resolvedConfigPath = globalConfigPath;
+    globalFoundPath = candidates.find((p) => existsSync(p)) || null;
   } else {
-    globalConfigPath = join(homedir(), ".pi", "agent", "unify-cmd.json");
-    resolvedConfigPath = globalConfigPath;
+    const candidates = [
+      join(homedir(), ".pi", "agent", "unify-cmd.json"),
+      join(homedir(), ".pi", "unify-cmd.json"),
+      join(homedir(), ".pi", ".unify-cmd.json"),
+    ];
+    globalFoundPath = candidates.find((p) => existsSync(p)) || null;
   }
 
   const effectiveCwd = cwd || process.cwd();
@@ -233,51 +227,26 @@ export async function loadCatalog(
     join(effectiveCwd, "unify-cmd.json"),
   ];
   const projectPath = projectCandidates.find(
-    (p) => existsSync(p) && p !== globalConfigPath
+    (p) => existsSync(p) && p !== globalFoundPath
   );
 
+  if (!globalFoundPath && !projectPath) {
+    throw new Error("config not found: unify-cmd.json is missing in agent directory or project directory");
+  }
+
+  const resolvedConfigPath = globalFoundPath || projectPath!;
+
   let rawConfig: any = {
-    agents: {
-      claude: {
-        enabled: true,
-        globalDir: "~/.claude/commands",
-        projectDir: ".claude/commands",
-        recursive: true,
-      },
-      opencode: {
-        enabled: true,
-        mirrorToPrompts: true,
-        globalDirs: [
-          "~/.config/opencode/commands",
-          "~/.config/opencode/command",
-          "~/.config/opencode/profiles/default/commands",
-        ],
-        projectDirs: [".opencode/commands", ".opencode/command"],
-        recursive: true,
-      },
-      codex: {
-        enabled: true,
-        globalDir: "~/.codex/prompts",
-        projectDir: null,
-        recursive: true,
-      },
-      gemini: {
-        enabled: true,
-        globalDir: "~/.gemini/commands",
-        projectDir: null,
-        recursive: true,
-      },
-    },
+    agents: {},
     custom: [],
     labelFormat: "[{scope}] ({agent}) | {description}",
     prefixFormat: "{agent}:{name}",
   };
 
-  if (existsSync(globalConfigPath)) {
+  if (globalFoundPath && existsSync(globalFoundPath)) {
     try {
-      const content = readFileSync(globalConfigPath, "utf-8");
+      const content = readFileSync(globalFoundPath, "utf-8");
       rawConfig = deepMerge(rawConfig, JSON.parse(content));
-      resolvedConfigPath = globalConfigPath;
     } catch {
       // malformed config
     }
@@ -287,9 +256,6 @@ export async function loadCatalog(
     try {
       const content = readFileSync(projectPath, "utf-8");
       rawConfig = deepMerge(rawConfig, JSON.parse(content));
-      if (!existsSync(globalConfigPath)) {
-        resolvedConfigPath = projectPath;
-      }
     } catch {
       // malformed project config
     }
@@ -317,17 +283,22 @@ export async function loadCatalog(
         }
       }
 
-      // Normalize projectDir paths
+      // Normalize projectDir paths without fixture hardcoding
       if (
         agentCfg.projectDir &&
         !existsSync(join(effectiveCwd, agentCfg.projectDir))
       ) {
-        const stripped = agentCfg.projectDir.replace(
-          /^tests\/fixtures\/?/,
-          ""
-        );
-        if (existsSync(join(effectiveCwd, stripped))) {
-          agentCfg.projectDir = stripped;
+        if (agentBaseDir && existsSync(join(agentBaseDir, agentCfg.projectDir))) {
+          agentCfg.projectDir = join(agentBaseDir, agentCfg.projectDir);
+        } else {
+          const parts = agentCfg.projectDir.split("/");
+          for (let i = 1; i < parts.length; i++) {
+            const candidate = parts.slice(i).join("/");
+            if (existsSync(join(effectiveCwd, candidate))) {
+              agentCfg.projectDir = candidate;
+              break;
+            }
+          }
         }
       }
     }

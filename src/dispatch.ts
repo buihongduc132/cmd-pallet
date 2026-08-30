@@ -113,12 +113,14 @@ export async function dispatch(
         commands = searchCommands(commands, query);
       }
 
-      const seenNames = new Set<string>();
+      const seen = new Set<string>();
       const deduped: typeof commands = [];
       for (const cmd of commands) {
-        const key = cmd.name.toLowerCase();
-        if (!seenNames.has(key)) {
-          seenNames.add(key);
+        const agent = (cmd.source?.agent || "").toLowerCase();
+        const name = (cmd.name || "").toLowerCase();
+        const key = `${agent}:${name}`;
+        if (!seen.has(key)) {
+          seen.add(key);
           deduped.push(cmd);
         }
       }
@@ -136,8 +138,15 @@ export async function dispatch(
       if (isJson) {
         stdout.write(JSON.stringify(commands, null, 2) + "\n");
       } else {
+        const nameCounts = new Map<string, number>();
+        for (const cmd of catalog.commands) {
+          const n = cmd.name.toLowerCase();
+          nameCounts.set(n, (nameCounts.get(n) || 0) + 1);
+        }
+
         for (const cmd of commands) {
-          stdout.write(listText(cmd) + "\n");
+          const isColliding = (nameCounts.get(cmd.name.toLowerCase()) || 0) > 1;
+          stdout.write(listText(cmd, isColliding) + "\n");
         }
       }
       return EXIT_CODES.OK;
@@ -314,7 +323,12 @@ export async function dispatch(
       const syncRes = await syncSlashCommands(outDir, cwd, {
         dryRun: isDryRun,
         commands: catalog.commands,
+        stderr,
       });
+
+      if (syncRes.skipped && syncRes.skipped > 0) {
+        stderr.write(`[warn] skipped ${syncRes.skipped} invalid command(s)\n`);
+      }
 
       if (isJson) {
         stdout.write(JSON.stringify(syncRes, null, 2) + "\n");

@@ -19,11 +19,11 @@
     "smoke-test": "vitest run tests/smoke.test.ts"
   },
   "dependencies": {
-    "pi-unify-cmd": "github:buihongduc132/pi-unify-cmd"
+    "pi-unify-cmd": "github:buihongduc132/pi-unify-cmd",
+    "typescript": "^5.8.0"
   },
   "devDependencies": {
     "@types/node": "^22.13.0",
-    "typescript": "^5.8.0",
     "vitest": "^3.2.1"
   },
   "keywords": [

@@ -280,7 +280,7 @@ describe("Regression Tests — Live-Verified Defects", () => {
       expect(commandNames.length).toBe(uniqueNames.size);
     });
 
-    it("deduplicates commands in search text output when multiple scopes have the command", async () => {
+    it("preserves cross-agent commands in search text output when multiple agents have same command name", async () => {
       const exitCode = await runCli(["search", "dup-command"], io);
       expect(exitCode).toBe(0);
       const lines = io.stdout
@@ -289,47 +289,51 @@ describe("Regression Tests — Live-Verified Defects", () => {
         .split("\n")
         .filter((l) => l.trim().length > 0);
 
-      const commandNames = lines.map((l) => l.split(/\t|\s{2,}/)[0].trim());
-      expect(commandNames.filter((name) => name === "dup-command").length).toBe(1);
+      const dupLines = lines.filter((l) => l.includes("dup-command"));
+      expect(dupLines.length).toBe(2);
+      expect(io.stdout.toString()).toMatch(/claude:dup-command|dup-command.*claude/i);
+      expect(io.stdout.toString()).toMatch(/codex:dup-command|dup-command.*codex/i);
     });
 
-    it("deduplicates commands in json list and search output", async () => {
+    it("preserves cross-agent commands in json list and search output", async () => {
       const listExit = await runCli(["list", "--json"], io);
       expect(listExit).toBe(0);
       const listJson = JSON.parse(io.stdout.toString());
-      const listNames = listJson.map((c: any) => c.name);
-      expect(listNames.length).toBe(new Set(listNames).size);
+      const dupEntries = listJson.filter(
+        (c: any) =>
+          c.name === "dup-command" ||
+          c.name?.endsWith(":dup-command") ||
+          c.name?.includes("dup-command")
+      );
+      expect(dupEntries.length).toBe(2);
 
       io.stdout.clear();
       const searchExit = await runCli(["search", "dup-command", "--json"], io);
       expect(searchExit).toBe(0);
       const searchJson = JSON.parse(io.stdout.toString());
-      expect(searchJson.length).toBe(1);
-      expect(searchJson[0].name).toBe("dup-command");
+      expect(searchJson.length).toBe(2);
+      const agents = searchJson.map((c: any) => c.source?.agent);
+      expect(agents).toContain("claude");
+      expect(agents).toContain("codex");
     });
 
-    it("deduplicates identical commands across 3 scopes (e.g. deploy-pi-sync-back pattern)", async () => {
+    it("deduplicates identical commands within the same agent across scopes", async () => {
       await withTempDir(async (tmp) => {
-        // Setup 3 agents with identical command copies
-        const claudeDir = join(tmp, "claude");
-        const codexDir = join(tmp, "codex");
-        const geminiDir = join(tmp, "gemini");
-        mkdirSync(claudeDir, { recursive: true });
-        mkdirSync(codexDir, { recursive: true });
-        mkdirSync(geminiDir, { recursive: true });
+        // Setup 1 agent with identical command in globalDir and projectDir
+        const claudeGlobal = join(tmp, "global-claude");
+        const claudeProject = join(tmp, "project-claude");
+        mkdirSync(claudeGlobal, { recursive: true });
+        mkdirSync(claudeProject, { recursive: true });
 
         const cmdContent = "---\nname: deploy-sync\ndescription: Sync command across scopes\n---\necho sync";
-        writeFileSync(join(claudeDir, "deploy-sync.md"), cmdContent);
-        writeFileSync(join(codexDir, "deploy-sync.md"), cmdContent);
-        writeFileSync(join(geminiDir, "deploy-sync.md"), cmdContent);
+        writeFileSync(join(claudeGlobal, "deploy-sync.md"), cmdContent);
+        writeFileSync(join(claudeProject, "deploy-sync.md"), cmdContent);
 
         const agentDir = join(tmp, "agent");
         mkdirSync(agentDir, { recursive: true });
         const config = {
           agents: {
-            claude: { enabled: true, globalDir: claudeDir, recursive: true },
-            codex: { enabled: true, globalDir: codexDir, recursive: true },
-            gemini: { enabled: true, globalDir: geminiDir, recursive: true },
+            claude: { enabled: true, globalDir: claudeGlobal, projectDir: "project-claude", recursive: true },
           },
           custom: [],
         };
@@ -350,7 +354,7 @@ describe("Regression Tests — Live-Verified Defects", () => {
           .split("\n")
           .filter((l) => l.trim().length > 0);
 
-        // Must appear exactly once in search output, not 3 times
+        // Must appear exactly once for the same agent, not duplicated
         expect(lines.length).toBe(1);
         expect(lines[0]).toContain("deploy-sync");
       });

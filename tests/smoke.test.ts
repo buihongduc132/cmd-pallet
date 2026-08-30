@@ -55,16 +55,16 @@ describe("Smoke Test — End-to-End CLI", () => {
 
   it("handles real catalog opt-in via CMD_PALLET_TEST_REAL_CATALOG with explicit SKIP if absent", async () => {
     const realConfigPath = join(homedir(), ".pi", "agent", "unify-cmd.json");
-    if (!existsSync(realConfigPath)) {
-      if (process.env.CMD_PALLET_TEST_REAL_CATALOG === "1") {
-        console.log("SKIP: Real catalog not found at ~/.pi/agent/unify-cmd.json");
-      }
+    if (process.env.CMD_PALLET_TEST_REAL_CATALOG !== "1" || !existsSync(realConfigPath)) {
+      console.log("SKIP: Real catalog opt-in unset (CMD_PALLET_TEST_REAL_CATALOG!=1) or real catalog absent");
+      return;
     }
 
     const realIo = createMockIo({
       cwd: process.cwd(),
       env: {
         PI_CODING_AGENT_DIR: join(homedir(), ".pi"),
+        CMD_PALLET_TEST_REAL_CATALOG: "1",
       },
     });
 

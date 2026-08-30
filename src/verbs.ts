@@ -88,7 +88,6 @@ export function formatHelp(): string {
   lines.push("");
   lines.push("Environment Variables:");
   lines.push("  PI_CODING_AGENT_DIR   Override ~/.pi agent directory location for multi-stage isolation");
-  lines.push("  CMD_PALLET_CACHE_TTL  Discovery cache TTL in seconds (default: 0)");
   lines.push("");
   lines.push("Distinction:");
   lines.push("  cmd-pallet provides unified headless CLI access across coding agents (Claude, OpenCode, Codex, Gemini).");
@@ -103,7 +102,6 @@ export function formatHelpJson(): object {
     verbs: VERBS,
     env: {
       PI_CODING_AGENT_DIR: "Override ~/.pi agent directory location for multi-stage isolation",
-      CMD_PALLET_CACHE_TTL: "Discovery cache TTL in seconds (default: 0)",
     },
     distinction: "cmd-pallet is standalone CLI; cmd-palette is interactive Pi TUI extension",
   };

@@ -98,7 +98,6 @@ cmd-pallet help --json
 ## Environment Variables
 
 - `PI_CODING_AGENT_DIR` — Root configuration directory for agent discovery (overrides default `~/.pi`).
-- `CMD_PALLET_CACHE_TTL` — Cache TTL in seconds (default `0`).
 
 ## License
 

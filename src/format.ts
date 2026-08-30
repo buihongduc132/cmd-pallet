@@ -5,8 +5,11 @@
 import type { ExternalCommand } from "./types.ts";
 import { buildInvocation, interpolate } from "./interpolate.ts";
 
-export function listText(cmd: ExternalCommand): string {
-  return `${cmd.name}\t${cmd.description || ""}`;
+export function listText(cmd: ExternalCommand, isColliding?: boolean): string {
+  const displayName = isColliding && cmd.source?.agent
+    ? `${cmd.source.agent}:${cmd.name}`
+    : cmd.name;
+  return `${displayName}\t${cmd.description || ""}`;
 }
 
 export function formatRead(cmd: ExternalCommand): string {
