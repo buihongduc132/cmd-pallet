@@ -109,11 +109,14 @@ def probe_chain(pallet: str, chain: "list[str]") -> "tuple[list[dict|None], list
 
 
 def build_prompt(requirement: str, context: str, instruction: str) -> str:
-    """Exact mandate template. Instruction = dynamically loaded cmd content or prose hop."""
+    """Exact mandate template. Instruction = dynamically loaded cmd content or prose hop.
+    Slash-expansion guard (probed 2026-09-05: agy expands when a PROMPT LINE starts
+    with /cmd; mid-prose stays literal): context + instruction are wrapped in
+    fenced blocks so no embedded line is ever a prompt-starting slash line."""
     return (
         f"this is user requirement : {requirement}\n"
-        f"This is previous context : {context}\n\n"
-        f"{instruction}"
+        f"This is previous context :\n<<<PREV_CONTEXT\n{context}\nPREV_CONTEXT>>>\n\n"
+        f"<<<INSTRUCTION\n{instruction}\nINSTRUCTION>>>"
     )
 
 

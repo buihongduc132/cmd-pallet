@@ -39,7 +39,8 @@ def test_pipe_modes():
 
 def test_template_exact():
     p = cpc.build_prompt("USER REQ", "PREV CTX", "INSTRUCTION")
-    assert p == "this is user requirement : USER REQ\nThis is previous context : PREV CTX\n\nINSTRUCTION"
+    assert p.startswith("this is user requirement : USER REQ\nThis is previous context :\n<<<PREV_CONTEXT\nPREV CTX\nPREV_CONTEXT>>>")
+    assert p.endswith("<<<INSTRUCTION\nINSTRUCTION\nINSTRUCTION>>>")
 
 def test_requirement_always_present_every_hop():
     # dry-run hop2 prompt must contain requirement: build via module fn + outputs
