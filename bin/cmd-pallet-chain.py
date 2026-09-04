@@ -113,9 +113,12 @@ def build_prompt(requirement: str, context: str, instruction: str) -> str:
 
 
 def run_agent(agent: str, prompt: str, workdir: str, timeout: int) -> "tuple[int, str]":
-    """Invoke cli-agent on the shell: pi -p <prompt> (or agy). Returns (rc, output)."""
+    """Invoke cli-agent on the shell: pi -p <prompt> (or agy). Returns (rc, output).
+    pi uses -ne (no extensions): /tmp cwd has no pi project context and a broken
+    global extension (open-goal-client) hard-fails loads outside projects —
+    verified live: plain pi -p in /tmp → extension load error; -ne → clean run."""
     if agent == "pi":
-        argv = ["pi", "-p", prompt]
+        argv = ["pi", "-ne", "-p", prompt]
     elif agent == "agy":
         argv = ["agy", "-p", prompt]
     else:
