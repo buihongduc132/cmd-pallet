@@ -139,7 +139,7 @@ def run_agent(agent: str, prompt: str, workdir: str, timeout: int,
             argv.append(prompt)
     elif agent == "agy":
         argv = ["agy", "--print-timeout", "240m0s", "--output-format", "stream-json",
-                "--disable-slash-commands", "-p", prompt]
+                "-p", prompt]
         stdin_data = None
     else:
         die(2, f"unsupported cli-agent '{agent}' (currently just pi / agy)")
