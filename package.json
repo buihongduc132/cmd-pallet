@@ -7,7 +7,8 @@
   "type": "module",
   "main": "src/index.ts",
   "bin": {
-    "cmd-pallet": "./bin/cmd-pallet.js"
+    "cmd-pallet": "./bin/cmd-pallet.js",
+    "cmd-pallet-chain": "bin/cmd-pallet-chain.py"
   },
   "engines": {
     "node": ">=22.18"
