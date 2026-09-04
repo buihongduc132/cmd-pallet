@@ -59,20 +59,26 @@ def cmd_pallet() -> str:
 
 def read_command(pallet: str, name: str) -> "dict | None":
     """cmd-pallet read <name> → dict; None if not found.
-    NOTE: `read --json` truncates at exactly 16384 bytes (upstream buffer cap,
-    live-verified 2026-09-05) — JSON parse fails on large cmds. Fallback: plain
-    `read` (untruncated) + parse the frontmatter header from text."""
+    CRITICAL (investigator-B P6): `cmd-pallet read --json` via PIPE silently truncates
+    at ~16KB — nondeterministic flush race (bin/cmd-pallet.js process.exit() before
+    pipe drain). Redirect stdout to a TEMP FILE instead (full content guaranteed;
+    verified 26,269 bytes clean where piped runs got 8-16KB)."""
+    import tempfile
     try:
+        with tempfile.NamedTemporaryFile(mode="w+", suffix=".md", delete=False) as tf:
+            tmp = tf.name
         r = subprocess.run(
             [pallet, "read", name],
-            capture_output=True, text=True, timeout=60,
+            stdout=open(tmp, "w"),
+            stderr=subprocess.DEVNULL,
+            timeout=60,
         )
+        text = open(tmp).read()
+        os.unlink(tmp)
     except subprocess.TimeoutExpired:
         return None
-    if r.returncode != 0 or not r.stdout.strip():
+    if r.returncode != 0 or not text.strip():
         return None
-    text = r.stdout
-    # First line is "# <name>" for found cmds; errors print "Command not found".
     if not text.startswith("#") and "Command not found" in text:
         return None
     desc = ""
@@ -82,7 +88,6 @@ def read_command(pallet: str, name: str) -> "dict | None":
             desc = line.split(":", 1)[1].strip()
         if line.startswith("argument-hint:"):
             hint = line.split(":", 1)[1].strip()
-    # Body = everything after the frontmatter-ish header (leading '# name' + hints + $ARGUMENTS marker stays — it IS the cmd content).
     return {"name": name, "description": desc, "argumentHint": hint, "content": text}
 
 
@@ -112,26 +117,113 @@ def build_prompt(requirement: str, context: str, instruction: str) -> str:
     )
 
 
-def run_agent(agent: str, prompt: str, workdir: str, timeout: int) -> "tuple[int, str]":
+def run_agent(agent: str, prompt: str, workdir: str, timeout: int,
+               log_base: "str | None" = None) -> "tuple[int, str]":
     """Invoke cli-agent on the shell. Returns (rc, output).
-    pi: plain `pi -p` (NO -ne — user mandate 2026-09-05). Global extension issues
-    in non-project cwds are the environment's problem, not the runner's.
-    agy: `--print-timeout 240m0s` (user mandate — agent hops are long-running)."""
+    pi: plain `pi -p --mode json` — investigator-B P2/P4: json mode STREAMS (NDJSON,
+    crash-safe partials); text mode flushes only at exit (kill = total loss).
+    Final text = last assistant message_end content. No -ne (user mandate).
+    agy: `--print-timeout 240m0s --output-format stream-json` (P3: streams;
+    result.result.response = final) + `--disable-slash-commands` (investigator-A:
+    hop instructions embed literal '# /cmd' lines — prevent slash expansion).
+    P5: process group (start_new_session) + SIGTERM→SIGKILL escalation → no
+    orphaned 240min agents when the chain runner dies.
+    P7: prompt >100KB → stdin (pi merges piped stdin into prompt)."""
+    import signal
     if agent == "pi":
-        argv = ["pi", "-p", prompt]
+        argv = ["pi", "-p", "--mode", "json"]
+        stdin_data = None
+        if len(prompt) > 100_000:
+            stdin_data = prompt  # off-argv (E2BIG guard); pi merges stdin into prompt
+        else:
+            argv.append(prompt)
     elif agent == "agy":
-        argv = ["agy", "--print-timeout", "240m0s", "-p", prompt]
+        argv = ["agy", "--print-timeout", "240m0s", "--output-format", "stream-json",
+                "--disable-slash-commands", "-p", prompt]
+        stdin_data = None
     else:
         die(2, f"unsupported cli-agent '{agent}' (currently just pi / agy)")
+
+    ndjson_path = f"{log_base}.ndjson" if log_base else None
+    proc = subprocess.Popen(
+        argv, cwd=workdir,
+        stdin=subprocess.PIPE if stdin_data is not None else subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        start_new_session=True,  # P5: own process group
+    )
+
+    import threading
+    lines: "list[str]" = []
+    def tee():
+        fh = open(ndjson_path, "a") if ndjson_path else None
+        try:
+            for line in proc.stdout:
+                lines.append(line)
+                if fh:
+                    fh.write(line)
+                    fh.flush()
+        finally:
+            if fh:
+                fh.close()
+    t = threading.Thread(target=tee, daemon=True)
+    t.start()
+
+    if stdin_data is not None:
+        try:
+            proc.stdin.write(stdin_data)
+            proc.stdin.close()
+        except BrokenPipeError:
+            pass
+
     try:
-        r = subprocess.run(
-            argv, cwd=workdir, capture_output=True, text=True, timeout=timeout
-        )
+        rc = proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
-        return 124, f"<agent timeout after {timeout}s>"
-    except FileNotFoundError:
-        return 127, f"<agent binary '{agent}' not found on PATH>"
-    return r.returncode, (r.stdout or "") + (("\n[stderr]\n" + r.stderr) if r.stderr.strip() else "")
+        os.killpg(proc.pid, signal.SIGTERM)
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            os.killpg(proc.pid, signal.SIGKILL)
+            proc.wait()
+        return 124, extract_final("".join(lines), agent)
+    t.join(timeout=5)
+    return rc, extract_final("".join(lines), agent)
+
+
+def extract_final(raw: str, agent: str) -> str:
+    """Last authoritative final text from NDJSON stream (investigator-B P2/P3)."""
+    if not raw.strip():
+        return ""
+    last_text = ""
+    try:
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            import json as _json
+            try:
+                ev = _json.loads(line)
+            except _json.JSONDecodeError:
+                continue
+            if agent == "pi":
+                if ev.get("type") == "message_end":
+                    msg = ev.get("message", {})
+                    if msg.get("role") == "assistant":
+                        parts = "".join(
+                            c.get("text", "") for c in (msg.get("content") or [])
+                            if isinstance(c, dict)
+                        )
+                        if parts.strip():
+                            last_text = parts
+            elif agent == "agy":
+                if ev.get("type") == "result":
+                    resp = (ev.get("result") or {}).get("response") or ""
+                    if resp.strip():
+                        last_text = resp
+    except Exception:
+        pass
+    return last_text or raw[-8000:]
 
 
 def pipe_context(outputs: "list[str]", mode: str) -> str:
@@ -207,6 +299,10 @@ def main() -> int:
     run_log_dir = os.path.join(log_root, run_stamp)
     os.makedirs(run_log_dir, exist_ok=True)
 
+    # run-level summary log (P8: running state written at start, below)
+    with open(os.path.join(run_log_dir, "run.meta.json"), "w") as f:
+        json.dump({**report, "status": "running"}, f, indent=2)
+
     def write_hop_log(idx: int, name: str, prompt: str, rc: "int|None", output: str, extra: dict):
         safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in name)[:60] or "hop"
         base = os.path.join(run_log_dir, f"{idx+1:02d}-{safe}")
@@ -241,11 +337,19 @@ def main() -> int:
             continue
 
         hop_t0 = time.time()
-        rc, out = run_agent(args.agent, prompt, args.workdir, args.timeout)
+        safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in name)[:60] or "hop"
+        log_base = os.path.join(run_log_dir, f"{idx+1:02d}-{safe}")
+        # P8: heartbeat meta BEFORE spawn — killed chain leaves inspectable state
+        with open(log_base + ".meta.json", "w") as f:
+            json.dump({"hop": idx + 1, "name": name, "status": "running",
+                       "pid": os.getpid(), "agent": args.agent,
+                       "startedAt": datetime.now(timezone.utc).isoformat()}, f, indent=2)
+        rc, out = run_agent(args.agent, prompt, args.workdir, args.timeout, log_base=log_base)
         duration = round(time.time() - hop_t0, 2)
         outputs.append(out if out.strip() else f"<hop {idx+1} produced no output>")
         meta = write_hop_log(idx, name, prompt, rc, out, {
-            "type": "cmd" if doc else "prose", "agent": args.agent, "durationSec": duration})
+            "type": "cmd" if doc else "prose", "agent": args.agent, "durationSec": duration,
+            "status": "done" if rc == 0 else "failed"})
         report["hops"].append({
             "hop": idx + 1, "name": name,
             "type": "cmd" if doc else "prose",
@@ -262,7 +366,7 @@ def main() -> int:
     report["status"] = "completed"
     report["finishedAt"] = datetime.now(timezone.utc).isoformat()
     report["logDir"] = run_log_dir
-    # run-level summary log
+    # run-level summary log (final overwrite of the running-state file)
     with open(os.path.join(run_log_dir, "run.meta.json"), "w") as f:
         json.dump(report, f, indent=2)
     with open(os.path.join(run_log_dir, "requirement.verbatim.md"), "w") as f:
