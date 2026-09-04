@@ -113,14 +113,14 @@ def build_prompt(requirement: str, context: str, instruction: str) -> str:
 
 
 def run_agent(agent: str, prompt: str, workdir: str, timeout: int) -> "tuple[int, str]":
-    """Invoke cli-agent on the shell: pi -p <prompt> (or agy). Returns (rc, output).
-    pi uses -ne (no extensions): /tmp cwd has no pi project context and a broken
-    global extension (open-goal-client) hard-fails loads outside projects —
-    verified live: plain pi -p in /tmp → extension load error; -ne → clean run."""
+    """Invoke cli-agent on the shell. Returns (rc, output).
+    pi: plain `pi -p` (NO -ne — user mandate 2026-09-05). Global extension issues
+    in non-project cwds are the environment's problem, not the runner's.
+    agy: `--print-timeout 240m0s` (user mandate — agent hops are long-running)."""
     if agent == "pi":
-        argv = ["pi", "-ne", "-p", prompt]
+        argv = ["pi", "-p", prompt]
     elif agent == "agy":
-        argv = ["agy", "-p", prompt]
+        argv = ["agy", "--print-timeout", "240m0s", "-p", prompt]
     else:
         die(2, f"unsupported cli-agent '{agent}' (currently just pi / agy)")
     try:
@@ -157,6 +157,8 @@ def main() -> int:
     ap.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
     ap.add_argument("--dry-run", action="store_true",
                     help="probe + print prompts, do not invoke agents")
+    ap.add_argument("--log-dir", default=None,
+                    help="store full run logs here (default: .cmd-pallet-chain-logs/ under workdir; every hop gets prompt+output+meta files)")
     ap.add_argument("--json", action="store_true", help="machine-readable run report")
     args = ap.parse_args()
 
@@ -199,6 +201,26 @@ def main() -> int:
         "hops": [],
     }
 
+    # ── Log store: one run dir, per-hop files (prompt / output / meta) ──────────
+    log_root = args.log_dir or os.path.join(args.workdir, ".cmd-pallet-chain-logs")
+    run_stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    run_log_dir = os.path.join(log_root, run_stamp)
+    os.makedirs(run_log_dir, exist_ok=True)
+
+    def write_hop_log(idx: int, name: str, prompt: str, rc: "int|None", output: str, extra: dict):
+        safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in name)[:60] or "hop"
+        base = os.path.join(run_log_dir, f"{idx+1:02d}-{safe}")
+        with open(base + ".prompt.md", "w") as f:
+            f.write(prompt)
+        if output is not None:
+            with open(base + ".output.md", "w") as f:
+                f.write(output)
+        meta = {"hop": idx + 1, "name": name, "exitCode": rc, "promptChars": len(prompt),
+                "outputChars": len(output or ""), "loggedAt": datetime.now(timezone.utc).isoformat(), **extra}
+        with open(base + ".meta.json", "w") as f:
+            json.dump(meta, f, indent=2)
+        return meta
+
     outputs: "list[str]" = []
     for idx, item in enumerate(chain):
         name = item.lstrip("/")
@@ -213,18 +235,23 @@ def main() -> int:
         prompt = build_prompt(args.requirement, pipe_context(outputs, args.pipe_mode), instruction)
 
         if args.dry_run:
-            report["hops"].append({"hop": idx + 1, "name": name, "type": "cmd" if doc else "prose", "promptChars": len(prompt)})
+            meta = write_hop_log(idx, name, prompt, None, None, {"type": "cmd" if doc else "prose", "dryRun": True})
+            report["hops"].append(meta)
             print(f"[dry-run] hop {idx+1}: {name} — prompt {len(prompt)} chars", file=sys.stderr)
             continue
 
+        hop_t0 = time.time()
         rc, out = run_agent(args.agent, prompt, args.workdir, args.timeout)
+        duration = round(time.time() - hop_t0, 2)
         outputs.append(out if out.strip() else f"<hop {idx+1} produced no output>")
+        meta = write_hop_log(idx, name, prompt, rc, out, {
+            "type": "cmd" if doc else "prose", "agent": args.agent, "durationSec": duration})
         report["hops"].append({
             "hop": idx + 1, "name": name,
             "type": "cmd" if doc else "prose",
-            "exitCode": rc, "outputChars": len(out),
+            "exitCode": rc, "outputChars": len(out), "durationSec": duration,
         })
-        print(f"[hop {idx+1}/{len(chain)}] {name}: rc={rc} out={len(out)}c", file=sys.stderr)
+        print(f"[hop {idx+1}/{len(chain)}] {name}: rc={rc} out={len(out)}c {duration}s → {meta['promptChars'] and ''}{run_log_dir}", file=sys.stderr)
         if rc != 0:
             report["status"] = "failed"
             report["failedHop"] = idx + 1
@@ -234,10 +261,16 @@ def main() -> int:
 
     report["status"] = "completed"
     report["finishedAt"] = datetime.now(timezone.utc).isoformat()
+    report["logDir"] = run_log_dir
+    # run-level summary log
+    with open(os.path.join(run_log_dir, "run.meta.json"), "w") as f:
+        json.dump(report, f, indent=2)
+    with open(os.path.join(run_log_dir, "requirement.verbatim.md"), "w") as f:
+        f.write(args.requirement)
     if args.json:
         print(json.dumps(report, indent=2))
     else:
-        print("\n=== FINAL HOP OUTPUT ===\n" + (outputs[-1] if outputs else ""), file=sys.stderr)
+        print(f"\n=== FINAL HOP OUTPUT ===\n{(outputs[-1] if outputs else '')}\n\n[logs] {run_log_dir}", file=sys.stderr)
     return 0
 
 
