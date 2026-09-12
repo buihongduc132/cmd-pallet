@@ -1,0 +1,10 @@
+{
+  "hop": 3,
+  "name": "gotcha-coverage",
+  "exitCode": null,
+  "promptChars": 7578,
+  "outputChars": 0,
+  "loggedAt": "2026-09-04T15:53:09.235249+00:00",
+  "type": "cmd",
+  "dryRun": true
+}

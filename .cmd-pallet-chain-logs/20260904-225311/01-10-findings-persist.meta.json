@@ -1,0 +1,10 @@
+{
+  "hop": 1,
+  "name": "10-findings-persist",
+  "exitCode": null,
+  "promptChars": 8156,
+  "outputChars": 0,
+  "loggedAt": "2026-09-04T15:53:11.408953+00:00",
+  "type": "cmd",
+  "dryRun": true
+}
