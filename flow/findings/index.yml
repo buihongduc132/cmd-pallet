@@ -1,0 +1,6 @@
+kind: findings
+description: |
+  findings docs (cmd-pallet flow knowledge base)
+documents:
+  - file: 2026-10-01_search-debate-verdicts.md
+    title: Verdict table — agy smart-search elements KEEP/CUT vs YAGNI
