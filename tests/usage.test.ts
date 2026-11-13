@@ -1,10 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { execFile } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, utimesSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { actionOf, dateHourKey, defaultUsageDir, recordUsage } from "../src/usage.ts";
+import { processIdentity } from "../src/usage-lock.ts";
 import { withTempDir } from "./helpers.ts";
 
 const execFileAsync = promisify(execFile);
@@ -174,6 +175,61 @@ describe("usage store", () => {
           delete (Object.prototype as any).read;
           Object.defineProperty(Object.prototype, "constructor", { value: ctor, writable: true, configurable: true, enumerable: false });
         }
+      }));
+  });
+
+  describe("store lock owner identity (cpal-qp8.9 / G12)", () => {
+    /** lock dir as left by an owner `{ pid, start }` */
+    function ownedLock(dir: string, owner: { pid: number; start?: string }, ageMs = 0): string {
+      const lock = join(dir, ".lock");
+      mkdirSync(lock);
+      writeFileSync(join(lock, "owner"), JSON.stringify({ ...owner, nonce: "held" }));
+      const t = new Date(Date.now() - ageMs);
+      utimesSync(lock, t, t);
+      return lock;
+    }
+
+    it("processIdentity: stable for a live pid, differs across processes, undefined for an exited pid", () => {
+      const self = processIdentity(process.pid);
+      expect(self).toMatch(/^[0-9a-f-]+:\d+$/);
+      expect(processIdentity(process.pid)).toBe(self);
+      const child = spawnSync(process.execPath, ["-e", ""]);
+      expect(processIdentity(child.pid!)).toBeUndefined();
+    });
+
+    it("owner exited and its PID was reused (live pid, other start identity) → lock broken, count kept, no hang", () =>
+      withTempDir((dir) => {
+        // process.pid is alive, but this owner record has another start identity = a reused pid
+        const lock = ownedLock(dir, { pid: process.pid, start: "00000000-0000-0000-0000-000000000000:1" });
+        const t = Date.now();
+        recordUsage({ dir, host: "h1", action: "list", now: H8 });
+        expect(Date.now() - t).toBeLessThan(500);
+        expect(existsSync(join(dir, "h1.json"))).toBe(true);
+        expect(readJson(join(dir, "h1.json")).h1.list["2026-11-14T08"]).toBe(1);
+        expect(existsSync(lock)).toBe(false);
+      }));
+
+    it("owner pid exited → lock broken immediately even when fresh", () =>
+      withTempDir((dir) => {
+        const child = spawnSync(process.execPath, ["-e", ""]);
+        ownedLock(dir, { pid: child.pid!, start: "00000000-0000-0000-0000-000000000000:1" });
+        recordUsage({ dir, host: "h1", action: "list", now: H8 });
+        expect(existsSync(join(dir, "h1.json"))).toBe(true);
+        expect(readJson(join(dir, "h1.json")).h1.list["2026-11-14T08"]).toBe(1);
+      }));
+
+    it("live owner (pid + matching start identity) is never broken by age", () =>
+      withTempDir((dir) => {
+        const lock = ownedLock(dir, { pid: process.pid, start: processIdentity(process.pid) }, 60_000);
+        recordUsage({ dir, host: "h1", action: "list", now: H8 });
+        expect(existsSync(join(dir, "h1.json"))).toBe(false);
+        expect(JSON.parse(readFileSync(join(lock, "owner"), "utf8")).nonce).toBe("held");
+      }));
+
+    it("recordUsage releases its own lock (no owner file or lock dir left)", () =>
+      withTempDir((dir) => {
+        recordUsage({ dir, host: "h1", action: "list", now: H8 });
+        expect(existsSync(join(dir, ".lock"))).toBe(false);
       }));
   });
 

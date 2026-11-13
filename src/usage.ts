@@ -4,16 +4,18 @@
  * Per-host counters, one file per host so git merges across machines never conflict:
  *   <dir>/<host>.json      → { "<host>": { "<action>": { "<YYYY-MM-DDTHH>": n } } }
  *   <dir>/<host>.cmds.json → { "<host>": { "<cmd>": { "<action>": { "<YYYY-MM-DDTHH>": n } } } }
- * Writes are serialized across processes with a mkdir lock and land atomically (tmp + rename).
+ * Writes are serialized across processes with an owned mkdir lock (usage-lock.ts) and land atomically (tmp + rename).
  */
 
-import { mkdirSync, readFileSync, renameSync, rmdirSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { acquireOwnedLock, releaseOwnedLock } from "./usage-lock.ts";
 
 /** Root of this cmd-pallet checkout (src/..). */
 export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
+/** only for a lock whose owner cannot be proven (no owner file / no /proc); a live owner is never broken */
 const LOCK_STALE_MS = 10_000;
 const LOCK_RETRIES = 50;
 const LOCK_RETRY_MS = 20;
@@ -49,32 +51,6 @@ export function actionOf(
   if (flags.version) return "version";
   if (verb === undefined) return "help";
   return known ? verb : "unknown";
-}
-
-function sleepSync(ms: number): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-
-function acquireLock(lock: string): boolean {
-  for (let i = 0; i < LOCK_RETRIES; i++) {
-    try {
-      mkdirSync(lock);
-      return true;
-    } catch (err: any) {
-      if (err?.code !== "EEXIST") return false;
-      try {
-        if (Date.now() - statSync(lock).mtimeMs > LOCK_STALE_MS) {
-          rmdirSync(lock);
-          continue;
-        }
-      } catch {
-        // lock vanished between mkdir and stat — retry immediately
-        continue;
-      }
-      sleepSync(LOCK_RETRY_MS);
-    }
-  }
-  return false;
 }
 
 /** Deep copy into null-prototype objects so keys like `__proto__` / `constructor` are plain own data keys. */
@@ -163,7 +139,8 @@ export function recordUsage(opts: RecordUsageOptions): void {
     return;
   }
   const lock = join(dir, ".lock");
-  if (!acquireLock(lock)) return;
+  const owner = acquireOwnedLock(lock, { retries: LOCK_RETRIES, retryMs: LOCK_RETRY_MS, staleMs: LOCK_STALE_MS });
+  if (owner === undefined) return;
   try {
     const actionFile = join(dir, `${host}.json`);
     const actions = readStore(actionFile);
@@ -179,10 +156,6 @@ export function recordUsage(opts: RecordUsageOptions): void {
   } catch {
     // never fail the CLI over usage bookkeeping
   } finally {
-    try {
-      rmdirSync(lock);
-    } catch {
-      // ignore
-    }
+    releaseOwnedLock(lock, owner);
   }
 }

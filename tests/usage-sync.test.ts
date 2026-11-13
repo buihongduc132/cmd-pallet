@@ -1,10 +1,11 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { maybeSync, syncUsage } from "../src/usage-sync.ts";
+import { processIdentity } from "../src/usage-lock.ts";
 
 const SYNC_SRC = resolve(fileURLToPath(new URL(".", import.meta.url)), "../src/usage-sync.ts");
 
@@ -150,6 +151,41 @@ describe("syncUsage", () => {
     expect(git(a, "rev-parse", "HEAD")).toBe(before);
     expect(remoteTree(remote)).not.toContain("usage/A.json");
     expect(existsSync(lock)).toBe(true);
+  });
+
+  it(".sync-lock owner exited and its PID was reused (live pid, other start identity) → broken, sync runs (cpal-qp8.9)", () => {
+    const { remote, a } = fixture();
+    writeUsage(a, "A");
+    const lock = join(a, "usage", ".sync-lock");
+    mkdirSync(lock);
+    writeFileSync(join(lock, "owner"), JSON.stringify({ pid: process.pid, start: "00000000-0000-0000-0000-000000000000:1", nonce: "held" }));
+    expect(syncUsage(a)).toMatch(/^ok: /);
+    expect(remoteTree(remote)).toContain("usage/A.json");
+    expect(existsSync(lock)).toBe(false);
+  });
+
+  it(".sync-lock owner pid exited → broken even when fresh (cpal-qp8.9)", () => {
+    const { remote, a } = fixture();
+    writeUsage(a, "A");
+    const lock = join(a, "usage", ".sync-lock");
+    mkdirSync(lock);
+    const child = spawnSync(process.execPath, ["-e", ""]);
+    writeFileSync(join(lock, "owner"), JSON.stringify({ pid: child.pid, nonce: "held" }));
+    expect(syncUsage(a)).toMatch(/^ok: /);
+    expect(remoteTree(remote)).toContain("usage/A.json");
+  });
+
+  it(".sync-lock live owner, 10 min old → skipped, lock untouched (cpal-qp8.9)", () => {
+    const { remote, a } = fixture();
+    writeUsage(a, "A");
+    const lock = join(a, "usage", ".sync-lock");
+    mkdirSync(lock);
+    writeFileSync(join(lock, "owner"), JSON.stringify({ pid: process.pid, start: processIdentity(process.pid), nonce: "held" }));
+    const old = new Date(Date.now() - 10 * 60_000);
+    utimesSync(lock, old, old);
+    expect(syncUsage(a)).toBe("skip: sync locked");
+    expect(remoteTree(remote)).not.toContain("usage/A.json");
+    expect(JSON.parse(readFileSync(join(lock, "owner"), "utf8")).nonce).toBe("held");
   });
 
   it("worker entry runs for real via node → remote has the commit", () => {
