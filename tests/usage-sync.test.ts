@@ -1,4 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
+import { readlinkSync } from "node:fs";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -158,7 +159,7 @@ describe("syncUsage", () => {
     writeUsage(a, "A");
     const lock = join(a, "usage", ".sync-lock");
     mkdirSync(lock);
-    writeFileSync(join(lock, "owner"), JSON.stringify({ pid: process.pid, start: "00000000-0000-0000-0000-000000000000:1", nonce: "held" }));
+    writeFileSync(join(lock, "owner"), JSON.stringify({ pid: process.pid, start: "00000000-0000-0000-0000-000000000000:1", ns: readlinkSync("/proc/self/ns/pid"), nonce: "held" }));
     expect(syncUsage(a)).toMatch(/^ok: /);
     expect(remoteTree(remote)).toContain("usage/A.json");
     expect(existsSync(lock)).toBe(false);
@@ -170,7 +171,7 @@ describe("syncUsage", () => {
     const lock = join(a, "usage", ".sync-lock");
     mkdirSync(lock);
     const child = spawnSync(process.execPath, ["-e", ""]);
-    writeFileSync(join(lock, "owner"), JSON.stringify({ pid: child.pid, nonce: "held" }));
+    writeFileSync(join(lock, "owner"), JSON.stringify({ pid: child.pid, ns: readlinkSync("/proc/self/ns/pid"), nonce: "held" }));
     expect(syncUsage(a)).toMatch(/^ok: /);
     expect(remoteTree(remote)).toContain("usage/A.json");
   });
@@ -180,7 +181,7 @@ describe("syncUsage", () => {
     writeUsage(a, "A");
     const lock = join(a, "usage", ".sync-lock");
     mkdirSync(lock);
-    writeFileSync(join(lock, "owner"), JSON.stringify({ pid: process.pid, start: processIdentity(process.pid), nonce: "held" }));
+    writeFileSync(join(lock, "owner"), JSON.stringify({ pid: process.pid, start: processIdentity(process.pid), ns: readlinkSync("/proc/self/ns/pid"), nonce: "held" }));
     const old = new Date(Date.now() - 10 * 60_000);
     utimesSync(lock, old, old);
     expect(syncUsage(a)).toBe("skip: sync locked");
