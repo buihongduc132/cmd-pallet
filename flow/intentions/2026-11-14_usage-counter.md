@@ -22,4 +22,4 @@ Source: Claude Code session, 2026-11-14 (user goal). Creation/invocation wrapper
 - [U4] Per-cmd file `usage/<hostname>.cmds.json`, same pattern: `{ "<hostname>": { "<cmd>": { "<action>": { "<date-hour>": count } } } }`. Applies to verbs that take one cmd (`read`/`get`/`run`).
 - [U2] "action" = the verb's own name from the verb table (`list`, `search`, `read`, `get`, `run`, `ping`, `sync`, `help`). `--help`/no verb → `help`, `--version` → `version`, unknown verb → `unknown`. Every invocation counts once.
 - [U1] commit of `usage/` paths only, in the background, debounced; never slows or fails the CLI. Only on branch `main` tracking `origin/main`. Push skipped while someone else's non-usage commits are unpushed. To push it must merge `origin/main` into the checkout (like `git pull`) — accepted, called out in README.
-- [U6] stats verb NOT built now ("later on"); data shape keeps it possible.
+- [U6] stats verb: first deferred ("later on"); built in plan r3 Task 5 (`cmd-pallet stats`, cpal-qp8.6) because the user asked to implement "all of these".
