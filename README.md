@@ -99,6 +99,32 @@ cmd-pallet help --json
 
 - `PI_CODING_AGENT_DIR` — Root configuration directory for agent discovery (overrides default `~/.pi`).
 
+## Usage Tracking
+
+Every invocation is counted in JSON files inside this repo, so usage from all machines merges through git.
+
+| File | Shape |
+|---|---|
+| `usage/<hostname>.json` | `{ "<hostname>": { "<action>": { "YYYY-MM-DDTHH": count } } }` |
+| `usage/<hostname>.cmds.json` | `{ "<hostname>": { "<cmd>": { "<action>": { "YYYY-MM-DDTHH": count } } } }` — `read`, `get`, `run` only |
+
+- `action` = verb name (`list`, `search`, `read`, `get`, `run`, `ping`, `sync`, `help`), plus `version` and `unknown`.
+- `<cmd>` = resolved command name (e.g. `read claude:deploy` → `deploy`); not found/ambiguous → name as typed.
+- Hour keys are UTC. One file per host, so machines never conflict in git.
+- After recording, a detached background worker commits `usage/*.json` and pushes (debounced). It never slows or fails the CLI; outcome per run is in `usage/.sync-log` (gitignored).
+
+Sync only runs when the checkout is on `main` tracking `origin/main`, with no merge/rebase/cherry-pick/bisect in progress. It commits only `usage/` paths. It does not push while `main` has someone's unpushed non-usage commits (usage stays committed locally until then).
+
+Callouts:
+- To push, the worker merges `origin/main` into the checkout (like `git pull`). Git refuses if that would overwrite uncommitted files; the worker then aborts and retries next time.
+- The background `git add`/`git commit` briefly holds `.git/index.lock`; a concurrent git command in the same checkout can fail once.
+
+| Variable | Effect |
+|---|---|
+| `CMD_PALLET_USAGE=0` | Disable recording and sync (the test suite sets this). |
+| `CMD_PALLET_USAGE_DIR` | Store elsewhere (no git sync unless it is `<repo>/usage`). |
+| `CMD_PALLET_USAGE_SYNC_MIN` | Sync debounce in minutes (default `10`; `0` = every invocation). |
+
 ## License
 
 MIT © Buc Bui (buihongduc132)
