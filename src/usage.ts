@@ -8,7 +8,7 @@
  */
 
 import { mkdirSync, readFileSync, renameSync, rmdirSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 const LOCK_STALE_MS = 10_000;
 const LOCK_RETRIES = 50;
@@ -73,16 +73,24 @@ function acquireLock(lock: string): boolean {
   return false;
 }
 
+/** Deep copy into null-prototype objects so keys like `__proto__` / `constructor` are plain own data keys. */
+function ownKeysOnly(value: unknown): Json | number {
+  if (typeof value !== "object" || value === null) return value as number;
+  const out: Json = Object.create(null);
+  for (const key of Object.keys(value)) out[key] = ownKeysOnly((value as Record<string, unknown>)[key]);
+  return out;
+}
+
 function readStore(file: string): Json {
   let raw: string;
   try {
     raw = readFileSync(file, "utf8");
   } catch {
-    return {};
+    return Object.create(null);
   }
   try {
     const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Json;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return ownKeysOnly(parsed) as Json;
   } catch {
     // fall through to corrupt handling
   }
@@ -91,12 +99,12 @@ function readStore(file: string): Json {
   } catch {
     // ignore — we overwrite it anyway
   }
-  return {};
+  return Object.create(null);
 }
 
 function sortKeys(value: Json | number): Json | number {
   if (typeof value !== "object" || value === null) return value;
-  const out: Json = {};
+  const out: Json = Object.create(null);
   for (const key of Object.keys(value).sort()) out[key] = sortKeys(value[key]);
   return out;
 }
@@ -107,16 +115,30 @@ function writeStore(file: string, data: Json): void {
   renameSync(tmp, file);
 }
 
+/** Own-key-only walk: inherited names (`__proto__`, `constructor`, …) never resolve to Object.prototype. */
 function increment(root: Json, path: string[]): void {
   let node = root;
   for (const key of path.slice(0, -1)) {
-    const next = node[key];
-    if (typeof next !== "object" || next === null) node[key] = {};
+    const next = Object.hasOwn(node, key) ? node[key] : undefined;
+    if (typeof next !== "object" || next === null) node[key] = Object.create(null);
     node = node[key] as Json;
   }
   const leaf = path[path.length - 1];
-  const prev = node[leaf];
+  const prev = Object.hasOwn(node, leaf) ? node[leaf] : undefined;
   node[leaf] = (typeof prev === "number" ? prev : 0) + 1;
+}
+
+/**
+ * Default usage dir for a cmd-pallet checkout: `<repoRoot>/usage`, or undefined when repoRoot is a
+ * linked git worktree (`.git` is a file) — its copy would conflict with main's on merge.
+ */
+export function defaultUsageDir(repoRoot: string): string | undefined {
+  try {
+    if (statSync(join(repoRoot, ".git")).isFile()) return undefined;
+  } catch {
+    // no .git → not a checkout; record in place
+  }
+  return resolve(repoRoot, "usage");
 }
 
 /** Increment usage counters for one invocation. Never throws; gives up silently if the lock is busy. */

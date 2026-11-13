@@ -3,6 +3,7 @@
  *
  * maybeSync: hot-path check (no git subprocess) → debounced detached worker spawn.
  * syncUsage: worker body — commit ONLY usage/*.json on main, merge origin/main, push.
+ *   Guards re-run right before the merge; `merge --abort` only ever undoes the merge this worker started.
  *   Any guard or git failure stops quietly; outcome is appended to usage/.sync-log (gitignored).
  * Worker entry: `node --experimental-strip-types src/usage-sync.ts <repoDir>`.
  */
@@ -12,6 +13,7 @@ import {
   appendFileSync,
   existsSync,
   mkdirSync,
+  readFileSync,
   readdirSync,
   rmdirSync,
   statSync,
@@ -109,15 +111,34 @@ function acquireSyncLock(lock: string): boolean {
   return false;
 }
 
-/** Steps 0–5; returns the outcome line. Throws on git failure (caller logs it). */
-function runSync(repoDir: string, now: Date): string {
-  // 0. guards
+function gitPath(repoDir: string, name: string): string {
+  return resolve(repoDir, git(repoDir, ["rev-parse", "--git-path", name]));
+}
+
+function readMergeHead(file: string): string | undefined {
+  try {
+    return readFileSync(file, "utf8").split("\n")[0].trim();
+  } catch {
+    return undefined;
+  }
+}
+
+/** `skip: ...` when a merge/rebase/cherry-pick/bisect is in progress, HEAD is detached or not on main; else undefined. */
+function checkoutBusy(repoDir: string): string | undefined {
   for (const name of IN_PROGRESS) {
-    if (existsSync(resolve(repoDir, git(repoDir, ["rev-parse", "--git-path", name])))) return `skip: ${name} in progress`;
+    if (existsSync(gitPath(repoDir, name))) return `skip: ${name} in progress`;
   }
   if (!gitOk(repoDir, ["symbolic-ref", "-q", "HEAD"])) return "skip: detached HEAD";
   const branch = git(repoDir, ["symbolic-ref", "--short", "HEAD"]);
   if (branch !== "main") return `skip: branch ${branch}`;
+  return undefined;
+}
+
+/** Steps 0–5; returns the outcome line. Throws on git failure (caller logs it). */
+function runSync(repoDir: string, now: Date, beforeMerge?: () => void): string {
+  // 0. guards
+  const busy = checkoutBusy(repoDir);
+  if (busy) return busy;
   let upstream: string;
   try {
     upstream = git(repoDir, ["rev-parse", "--abbrev-ref", "main@{u}"]);
@@ -149,8 +170,17 @@ function runSync(repoDir: string, now: Date): string {
 
   // 4. merge upstream when behind
   if (Number(git(repoDir, ["rev-list", "--count", "HEAD..@{u}"])) > 0) {
-    if (!gitOk(repoDir, ["merge", "--no-edit", "@{u}"])) {
-      gitOk(repoDir, ["merge", "--abort"]);
+    beforeMerge?.();
+    // the checkout is shared: someone may have started a merge/rebase or switched branch since step 0
+    const busyNow = checkoutBusy(repoDir);
+    if (busyNow) return busyNow;
+    const target = git(repoDir, ["rev-parse", "@{u}"]);
+    const mergeHead = gitPath(repoDir, "MERGE_HEAD");
+    const hadMergeHead = existsSync(mergeHead);
+    // merge the pinned sha (not `@{u}`) so a concurrent fetch cannot change what MERGE_HEAD is compared to
+    if (!gitOk(repoDir, ["merge", "--no-edit", "-m", "Merge remote-tracking branch 'origin/main'", target])) {
+      // abort ONLY the merge we started: MERGE_HEAD is new and points at the upstream sha we merged
+      if (!hadMergeHead && readMergeHead(mergeHead) === target) gitOk(repoDir, ["merge", "--abort"]);
       return "stop: merge failed";
     }
   }
@@ -162,7 +192,7 @@ function runSync(repoDir: string, now: Date): string {
 }
 
 /** Commit + push usage/ in repoDir. Synchronous, never throws; returns the outcome line it logged. */
-export function syncUsage(repoDir: string, opts?: { now?: Date }): string {
+export function syncUsage(repoDir: string, opts?: { now?: Date; beforeMerge?: () => void }): string {
   const now = opts?.now ?? new Date();
   const usageDir = join(repoDir, "usage");
   try {
@@ -176,7 +206,7 @@ export function syncUsage(repoDir: string, opts?: { now?: Date }): string {
     outcome = "skip: sync locked";
   } else {
     try {
-      outcome = runSync(repoDir, now);
+      outcome = runSync(repoDir, now, opts?.beforeMerge);
     } catch (err: any) {
       const first = String(err?.stderr || err?.message || err).trim().split("\n")[0];
       outcome = `stop: git failed (${first})`;

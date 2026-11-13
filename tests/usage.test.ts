@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, utimesSync, writeFile
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { actionOf, dateHourKey, recordUsage } from "../src/usage.ts";
+import { actionOf, dateHourKey, defaultUsageDir, recordUsage } from "../src/usage.ts";
 import { withTempDir } from "./helpers.ts";
 
 const execFileAsync = promisify(execFile);
@@ -145,5 +145,54 @@ describe("usage store", () => {
         expect(readJson(join(dir, "h1.cmds.json")).h1.x.run["2026-11-14T08"]).toBe(20);
         expect(existsSync(join(dir, ".lock"))).toBe(false);
       }), 30_000);
+
+    it("prototype-named keys (__proto__ / constructor / read) are stored as own keys, no pollution (N6)", () =>
+      withTempDir((dir) => {
+        const ctor = Object.prototype.constructor;
+        try {
+          recordUsage({ dir, host: "h1", action: "constructor", cmd: "__proto__", now: H8 });
+          recordUsage({ dir, host: "h1", action: "read", cmd: "__proto__", now: H8 });
+          expect(({} as any).read).toBeUndefined();
+          expect(({} as any).constructor).toBe(Object);
+          recordUsage({ dir, host: "h1", action: "constructor", cmd: "__proto__", now: H8 });
+
+          const actions = readJson(join(dir, "h1.json"));
+          expect(Object.hasOwn(actions.h1, "constructor")).toBe(true);
+          expect(actions.h1.constructor["2026-11-14T08"]).toBe(2);
+          expect(actions.h1.read["2026-11-14T08"]).toBe(1);
+
+          const cmds = readJson(join(dir, "h1.cmds.json"));
+          expect(Object.hasOwn(cmds.h1, "__proto__")).toBe(true);
+          const proto = cmds.h1["__proto__"];
+          expect(Object.hasOwn(proto, "constructor")).toBe(true);
+          expect(proto.constructor["2026-11-14T08"]).toBe(2);
+          expect(proto.read["2026-11-14T08"]).toBe(1);
+          expect(readFileSync(join(dir, "h1.cmds.json"), "utf8")).toContain('"__proto__"');
+          expect(({} as any).read).toBeUndefined();
+        } finally {
+          // undo any pollution so a RED run cannot poison the worker
+          delete (Object.prototype as any).read;
+          Object.defineProperty(Object.prototype, "constructor", { value: ctor, writable: true, configurable: true, enumerable: false });
+        }
+      }));
+  });
+
+  describe("defaultUsageDir (N5)", () => {
+    it("main checkout (.git dir) → <root>/usage", () =>
+      withTempDir((root) => {
+        mkdirSync(join(root, ".git"));
+        expect(defaultUsageDir(root)).toBe(resolve(root, "usage"));
+      }));
+
+    it("linked worktree (.git file) → undefined", () =>
+      withTempDir((root) => {
+        writeFileSync(join(root, ".git"), "gitdir: /elsewhere/.git/worktrees/x\n");
+        expect(defaultUsageDir(root)).toBeUndefined();
+      }));
+
+    it("no .git at all (installed copy) → <root>/usage", () =>
+      withTempDir((root) => {
+        expect(defaultUsageDir(root)).toBe(resolve(root, "usage"));
+      }));
   });
 });

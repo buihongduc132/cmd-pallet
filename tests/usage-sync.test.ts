@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -161,6 +161,81 @@ describe("syncUsage", () => {
     });
     expect(remoteTree(remote)).toContain("usage/A.json");
     expect(existsSync(join(a, "usage", ".sync-log"))).toBe(true);
+  });
+});
+
+/** B pushes a usage commit so A is behind origin/main by one commit. */
+function pushFromB(b: string): void {
+  writeUsage(b, "B");
+  syncUsage(b);
+}
+
+/** Start a REAL conflicting merge in repo (add/add conflict on README.md); returns the MERGE_HEAD sha. */
+function startForeignConflictMerge(repo: string): string {
+  const blob = execFileSync("git", ["hash-object", "-w", "--stdin"], { cwd: repo, input: "side\n", encoding: "utf8" }).trim();
+  const tree = execFileSync("git", ["mktree"], { cwd: repo, input: `100644 blob ${blob}\tREADME.md\n`, encoding: "utf8" }).trim();
+  const side = git(repo, "commit-tree", tree, "-m", "side");
+  expect(() => git(repo, "merge", "--allow-unrelated-histories", "--no-edit", side)).toThrow();
+  return side;
+}
+
+function mergeHeadPath(repo: string): string {
+  return resolve(repo, git(repo, "rev-parse", "--git-path", "MERGE_HEAD"));
+}
+
+describe("syncUsage merge safety (B1)", () => {
+  it("foreign merge starts between fetch and merge → skip, no merge, no abort, their state intact", () => {
+    const { a, b } = fixture();
+    pushFromB(b);
+    writeUsage(a, "A");
+    let side = "";
+    const outcome = syncUsage(a, { beforeMerge: () => (side = startForeignConflictMerge(a)) });
+    expect(side).not.toBe("");
+    expect(outcome).toMatch(/^skip: MERGE_HEAD in progress/);
+    expect(existsSync(mergeHeadPath(a))).toBe(true);
+    expect(readFileSync(mergeHeadPath(a), "utf8").trim()).toBe(side);
+    expect(git(a, "ls-files", "-u")).toContain("README.md");
+    expect(readFileSync(join(a, "README.md"), "utf8")).toContain("<<<<<<<");
+    // our merge never ran: origin's usage/B.json not merged in
+    expect(existsSync(join(a, "usage", "B.json"))).toBe(false);
+  });
+
+  it("branch switched between fetch and merge → skip, nothing merged into it", () => {
+    const { a, b } = fixture();
+    pushFromB(b);
+    writeUsage(a, "A");
+    const outcome = syncUsage(a, { beforeMerge: () => git(a, "checkout", "-q", "-b", "feature") });
+    expect(outcome).toBe("skip: branch feature");
+    expect(existsSync(join(a, "usage", "B.json"))).toBe(false);
+  });
+
+  it("our merge refused (dirty file origin changed) → stop, dirty file + tree intact, no MERGE_HEAD", () => {
+    const { a, b } = fixture();
+    writeFileSync(join(b, "README.md"), "from-b\n");
+    git(b, "commit", "-q", "-am", "b edits readme");
+    git(b, "push", "-q", "origin", "main");
+    writeFileSync(join(a, "README.md"), "dirty-a\n");
+    writeUsage(a, "A");
+    const outcome = syncUsage(a);
+    expect(outcome).toBe("stop: merge failed");
+    expect(readFileSync(join(a, "README.md"), "utf8")).toBe("dirty-a\n");
+    expect(git(a, "diff", "--name-only")).toBe("README.md");
+    expect(existsSync(mergeHeadPath(a))).toBe(false);
+    expect(git(a, "log", "-1", "--format=%s")).toMatch(/^chore\(usage\)/);
+  });
+
+  it("our own merge conflicts (MERGE_HEAD == @{u}) → aborted, clean tree", () => {
+    const { a, b } = fixture();
+    // both clones write the SAME host file → our merge conflicts on usage/X.json
+    writeUsage(b, "X");
+    writeFileSync(join(b, "usage", "X.json"), JSON.stringify({ X: { list: { "2026-11-14T09": 5 } } }) + "\n");
+    syncUsage(b);
+    writeUsage(a, "X");
+    const outcome = syncUsage(a);
+    expect(outcome).toBe("stop: merge failed");
+    expect(existsSync(mergeHeadPath(a))).toBe(false);
+    expect(git(a, "ls-files", "-u")).toBe("");
+    expect(git(a, "status", "--porcelain", "--untracked-files=no")).toBe("");
   });
 });
 

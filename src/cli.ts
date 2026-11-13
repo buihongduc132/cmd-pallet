@@ -6,7 +6,7 @@ import { dispatch } from "./dispatch.ts";
 import type { IoStreams } from "./types.ts";
 import { parseArgs } from "./flags.ts";
 import { getVerb } from "./verbs.ts";
-import { actionOf, recordUsage } from "./usage.ts";
+import { actionOf, defaultUsageDir, recordUsage } from "./usage.ts";
 import { maybeSync } from "./usage-sync.ts";
 
 import { fileURLToPath } from "node:url";
@@ -29,7 +29,9 @@ export function recordInvocation(
     const known = verb !== undefined && getVerb(verb) !== undefined;
     const action = actionOf(verb, parsed.flags, known);
     const cmd = CMD_ACTIONS.has(action) ? usage?.cmd : undefined;
-    const dir = env.CMD_PALLET_USAGE_DIR || resolve(REPO_ROOT, "usage");
+    // linked worktree → no default store (explicit CMD_PALLET_USAGE_DIR still records)
+    const dir = env.CMD_PALLET_USAGE_DIR || defaultUsageDir(REPO_ROOT);
+    if (!dir) return;
     recordUsage({ dir, host: hostname(), action, cmd });
     const rawMin = env.CMD_PALLET_USAGE_SYNC_MIN?.trim();
     const syncMin = rawMin ? Number(rawMin) : NaN;
