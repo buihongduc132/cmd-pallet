@@ -34,7 +34,11 @@ describe("usage store", () => {
   describe("actionOf", () => {
     it("returns the verb name when known", () => {
       expect(actionOf("read", {}, true)).toBe("read");
-      expect(actionOf("list", { version: true }, true)).toBe("list");
+    });
+
+    it("returns version for --version even with a verb (mirrors dispatch precedence)", () => {
+      expect(actionOf("list", { version: true }, true)).toBe("version");
+      expect(actionOf("bogus", { version: true }, false)).toBe("version");
     });
 
     it("returns help for --help or no verb", () => {

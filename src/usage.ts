@@ -30,11 +30,11 @@ export function dateHourKey(d: Date): string {
 }
 
 /**
- * Action name for one CLI invocation.
- * - `help` when `--help` is set or no verb was given
- * - `version` when `--version` is set (and not help) with no verb
- * - the verb's own name when it is a known verb
- * - `unknown` otherwise
+ * Action name for one CLI invocation — mirrors dispatch precedence:
+ * - `help` when `--help` is set
+ * - `version` when `--version` is set (even with a verb)
+ * - `help` when no verb was given
+ * - the verb's own name when it is a known verb, else `unknown`
  */
 export function actionOf(
   verb: string | undefined,
@@ -42,7 +42,8 @@ export function actionOf(
   known: boolean,
 ): string {
   if (flags.help) return "help";
-  if (verb === undefined) return flags.version ? "version" : "help";
+  if (flags.version) return "version";
+  if (verb === undefined) return "help";
   return known ? verb : "unknown";
 }
 

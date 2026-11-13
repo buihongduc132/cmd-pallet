@@ -43,6 +43,8 @@ export function createMockIo(overrides?: { cwd?: string; env?: Record<string, st
     env: {
       PI_CODING_AGENT_DIR: FIXTURE_ROOT,
       CMD_PALLET_CACHE_TTL: "0",
+      // io.env replaces process.env, so the vitest-level CMD_PALLET_USAGE=0 must be repeated here
+      CMD_PALLET_USAGE: "0",
       ...overrides?.env,
     },
   };

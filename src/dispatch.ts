@@ -174,6 +174,7 @@ export async function dispatch(
       const catalog = await loadCatalog(cwd, { agentDir: env.PI_CODING_AGENT_DIR });
       const cmdName = positional[0];
       const findResult = findCommand(catalog.commands, cmdName);
+      if (io?.usage) io.usage.cmd = findResult.command?.name ?? cmdName;
 
       if (findResult.ambiguous) {
         const candidates = (findResult.candidates || []).map(
@@ -251,6 +252,7 @@ export async function dispatch(
       const cmdName = positional[0];
       const cmdArgs = positional.slice(1);
       const findResult = findCommand(catalog.commands, cmdName);
+      if (io?.usage) io.usage.cmd = findResult.command?.name ?? cmdName;
 
       if (findResult.ambiguous) {
         const candidates = (findResult.candidates || []).map(

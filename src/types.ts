@@ -91,6 +91,8 @@ export interface IoStreams {
   stderr?: { write: (s: string) => void };
   cwd?: string;
   env?: Record<string, string | undefined>;
+  /** Mutable slot dispatch fills for usage recording (resolved cmd name for read/get/run). */
+  usage?: { cmd?: string };
 }
 
 export const EXIT_CODES = {
