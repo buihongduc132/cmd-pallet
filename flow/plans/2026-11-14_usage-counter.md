@@ -56,14 +56,27 @@ Files: create `src/usage-sync.ts` (also worker entry: `node src/usage-sync.ts <r
 Files: modify `README.md` (Usage tracking section: files, shape, env knobs, merge model, callouts: sync merges origin/main into the live checkout; background commit briefly holds `index.lock`).
 - Real run on this host after merge to `main`: `CMD_PALLET_USAGE_SYNC_MIN=0 cmd-pallet read spb-plan` → `usage/$(hostname).json` + `.cmds.json` show counts; within 30 s commit `chore(usage)` exists on `origin/main` (`git log origin/main -1 -- usage/`).
 
+## Task 5 — `stats` verb [U6] (added r3, 2026-11-14: user asked to implement "all of these", which includes U6)
+Files: create `src/usage-stats.ts` (pure: read `usage/*.json` + `usage/*.cmds.json` of ALL hosts → aggregate), modify `src/verbs.ts` (verb `stats`), `src/dispatch.ts` (route), test `tests/usage-stats.test.ts`, README Usage tracking section.
+- `cmd-pallet stats [--top N] [--host H] [--json]` reads the merged `usage/` dir (same dir resolution as recording: `CMD_PALLET_USAGE_DIR` else `<repo>/usage`), never writes. Default N=10.
+- Output sections [U6 "which cmd being use most , and which machine , time"]:
+  1. **Top commands**: cmd | total | per host (sum over verbs read/get/run and all hours), sorted total desc, top N.
+  2. **By machine**: host | total invocations (sum of action file) | top action, sorted desc.
+  3. **By time**: date-hour (UTC) | total across hosts, most recent N rows; plus hour-of-day (00–23 UTC) totals.
+- `--host H` filters every section to one host. `--json` prints `{ topCommands, byHost, byDateHour, byHourOfDay }`.
+- Malformed/corrupt file → skip it with one stderr warning; empty/missing dir → "no usage recorded" exit 0.
+- RED: fixture usage dir with 2 hosts → exact top-command order, per-host totals, date-hour and hour-of-day sums; `--host` filter; `--json` shape; corrupt file skipped; empty dir.
+- Real run: `cmd-pallet stats` on main2 after pulling shows rows for bhd-main2, bhd-pad1, bhd-main4.
+
 ## Out of scope
-Stats verb [U6 "later on"]; pi `cmd_palette` tool in pi-cmd-palette repo (separate code path — call out).
+pi `cmd_palette` tool in pi-cmd-palette repo (separate code path — call out).
 
 ## Gate ledger
 | Plan rev | (a) covered | (b) simplest | @V |
 |---|---|---|---|
 | r1 | FAIL | FAIL | REVISE (8 items) |
 | r2 | PASS | PASS | EXIT |
+| r3 | +T5 stats [U6], +T6 push-race bug | — | follow-up (T5 reviewed per task) |
 
 ## Final verification
 `npx tsc --noEmit`, `npx vitest run` all green; real E2E of Task 4; `superpower-requesting-code-review` on the branch diff; merge `wt/usage-counter` → `main`, push.
@@ -76,3 +89,5 @@ Rig `cmd-pallet` (prefix `cpal`, suspended). Epic `cpal-qp8`. Convoy `cpal-1mj` 
 | T2 wire runCli | cpal-qp8.2 | cpal-1mj | blocked-by .1 (consumes `recordUsage`) |
 | T3 git sync | cpal-qp8.3 | cpal-1mj | blocked-by .2 (extends `recordInvocation`) |
 | T4 README + E2E | cpal-qp8.4 | cpal-1mj | blocked-by .3 (needs full pipeline) |
+| bug push race | cpal-qp8.5 | — | discovered-from .3 (closed bbf428d) |
+| T5 stats verb | cpal-qp8.6 | — | reads files produced by .1/.3 |
