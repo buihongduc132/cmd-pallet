@@ -15,7 +15,6 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
-  rmdirSync,
   statSync,
   utimesSync,
   writeFileSync,
@@ -23,9 +22,11 @@ import {
 import { hostname } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { acquireOwnedLock, releaseOwnedLock } from "./usage-lock.ts";
 
 const SELF = fileURLToPath(import.meta.url);
 const DEFAULT_DEBOUNCE_MIN = 10;
+/** only for a lock whose owner cannot be proven (no owner file / no /proc); a live owner is never broken */
 const SYNC_LOCK_STALE_MS = 5 * 60_000;
 const GIT_TIMEOUT_MS = 60_000;
 const MAX_PUSH_ATTEMPTS = 3;
@@ -92,24 +93,6 @@ function gitOk(cwd: string, args: string[]): boolean {
   } catch {
     return false;
   }
-}
-
-function acquireSyncLock(lock: string): boolean {
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      mkdirSync(lock);
-      return true;
-    } catch (err: any) {
-      if (err?.code !== "EEXIST") return false;
-      try {
-        if (Date.now() - statSync(lock).mtimeMs <= SYNC_LOCK_STALE_MS) return false;
-        rmdirSync(lock);
-      } catch {
-        // vanished meanwhile → retry
-      }
-    }
-  }
-  return false;
 }
 
 function gitPath(repoDir: string, name: string): string {
@@ -219,7 +202,8 @@ export function syncUsage(repoDir: string, opts?: { now?: Date } & SyncHooks): s
   }
   let outcome: string;
   const lock = join(usageDir, ".sync-lock");
-  if (!acquireSyncLock(lock)) {
+  const owner = acquireOwnedLock(lock, { retries: 2, retryMs: 0, staleMs: SYNC_LOCK_STALE_MS });
+  if (owner === undefined) {
     outcome = "skip: sync locked";
   } else {
     try {
@@ -228,11 +212,7 @@ export function syncUsage(repoDir: string, opts?: { now?: Date } & SyncHooks): s
       const first = String(err?.stderr || err?.message || err).trim().split("\n")[0];
       outcome = `stop: git failed (${first})`;
     } finally {
-      try {
-        rmdirSync(lock);
-      } catch {
-        // ignore
-      }
+      releaseOwnedLock(lock, owner);
     }
   }
   // 6. log

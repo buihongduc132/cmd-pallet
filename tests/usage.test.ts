@@ -1,13 +1,17 @@
 import { describe, it, expect } from "vitest";
-import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, utimesSync, writeFileSync } from "node:fs";
+import { execFile, spawn, spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, readdirSync, readlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { actionOf, dateHourKey, defaultUsageDir, recordUsage } from "../src/usage.ts";
+import { acquireOwnedLock, processIdentity, releaseOwnedLock } from "../src/usage-lock.ts";
 import { withTempDir } from "./helpers.ts";
 
 const execFileAsync = promisify(execFile);
+const SELF_NS = readlinkSync("/proc/self/ns/pid");
+const LOCK_SRC_URL = pathToFileURL(resolve(fileURLToPath(new URL(".", import.meta.url)), "../src/usage-lock.ts")).href;
+const HAS_UNSHARE = spawnSync("unshare", ["-Urpf", "--mount-proc", "true"]).status === 0;
 const USAGE_SRC = resolve(fileURLToPath(new URL(".", import.meta.url)), "../src/usage.ts");
 
 const H8 = new Date(Date.UTC(2026, 10, 14, 8, 30, 0));
@@ -174,6 +178,154 @@ describe("usage store", () => {
           delete (Object.prototype as any).read;
           Object.defineProperty(Object.prototype, "constructor", { value: ctor, writable: true, configurable: true, enumerable: false });
         }
+      }));
+  });
+
+  describe("store lock owner identity (cpal-qp8.9 / G12)", () => {
+    /** lock dir as left by an owner `{ pid, start, ns }`; ns defaults to this process's pid namespace */
+    function ownedLock(dir: string, owner: { pid: number; start?: string; ns?: string | null }, ageMs = 0): string {
+      const lock = join(dir, ".lock");
+      mkdirSync(lock);
+      const ns = owner.ns === undefined ? SELF_NS : (owner.ns ?? undefined);
+      writeFileSync(join(lock, "owner"), JSON.stringify({ ...owner, ns, nonce: "held" }));
+      const t = new Date(Date.now() - ageMs);
+      utimesSync(lock, t, t);
+      return lock;
+    }
+
+    it("processIdentity: stable for a live pid, differs across processes, undefined for an exited pid", () => {
+      const self = processIdentity(process.pid);
+      expect(self).toMatch(/^[0-9a-f-]+:\d+$/);
+      expect(processIdentity(process.pid)).toBe(self);
+      const child = spawnSync(process.execPath, ["-e", ""]);
+      expect(processIdentity(child.pid!)).toBeUndefined();
+    });
+
+    it("owner exited and its PID was reused (live pid, other start identity) → lock broken, count kept, no hang", () =>
+      withTempDir((dir) => {
+        // process.pid is alive, but this owner record has another start identity = a reused pid
+        const lock = ownedLock(dir, { pid: process.pid, start: "00000000-0000-0000-0000-000000000000:1" });
+        const t = Date.now();
+        recordUsage({ dir, host: "h1", action: "list", now: H8 });
+        expect(Date.now() - t).toBeLessThan(500);
+        expect(existsSync(join(dir, "h1.json"))).toBe(true);
+        expect(readJson(join(dir, "h1.json")).h1.list["2026-11-14T08"]).toBe(1);
+        expect(existsSync(lock)).toBe(false);
+      }));
+
+    it("owner pid exited → lock broken immediately even when fresh", () =>
+      withTempDir((dir) => {
+        const child = spawnSync(process.execPath, ["-e", ""]);
+        ownedLock(dir, { pid: child.pid!, start: "00000000-0000-0000-0000-000000000000:1" });
+        recordUsage({ dir, host: "h1", action: "list", now: H8 });
+        expect(existsSync(join(dir, "h1.json"))).toBe(true);
+        expect(readJson(join(dir, "h1.json")).h1.list["2026-11-14T08"]).toBe(1);
+      }));
+
+    it("live owner (pid + matching start identity) is never broken by age", () =>
+      withTempDir((dir) => {
+        const lock = ownedLock(dir, { pid: process.pid, start: processIdentity(process.pid) }, 60_000);
+        recordUsage({ dir, host: "h1", action: "list", now: H8 });
+        expect(existsSync(join(dir, "h1.json"))).toBe(false);
+        expect(JSON.parse(readFileSync(join(lock, "owner"), "utf8")).nonce).toBe("held");
+      }));
+
+    it("owner in another pid namespace: no pid/identity check (even ESRCH) → kept while fresh, broken once aged", () =>
+      withTempDir((dir) => {
+        // pid looks exited from HERE, but it belongs to another namespace → only the age rule applies
+        const child = spawnSync(process.execPath, ["-e", ""]);
+        const lock = ownedLock(dir, { pid: child.pid!, start: "x:1", ns: "pid:[1]" });
+        recordUsage({ dir, host: "h1", action: "list", now: H8 });
+        expect(existsSync(join(dir, "h1.json"))).toBe(false);
+        expect(JSON.parse(readFileSync(join(lock, "owner"), "utf8")).nonce).toBe("held");
+        const old = new Date(Date.now() - 11_000);
+        utimesSync(lock, old, old);
+        recordUsage({ dir, host: "h1", action: "list", now: H8 });
+        expect(readJson(join(dir, "h1.json")).h1.list["2026-11-14T08"]).toBe(1);
+      }));
+
+    it("owner without a recorded namespace → age rule only (fresh lock with exited pid is kept)", () =>
+      withTempDir((dir) => {
+        const child = spawnSync(process.execPath, ["-e", ""]);
+        const lock = ownedLock(dir, { pid: child.pid!, start: "x:1", ns: null });
+        recordUsage({ dir, host: "h1", action: "list", now: H8 });
+        expect(existsSync(join(dir, "h1.json"))).toBe(false);
+        expect(existsSync(join(lock, "owner"))).toBe(true);
+      }));
+
+    it("acquireOwnedLock records this process's pid namespace in the owner file", () =>
+      withTempDir((dir) => {
+        const lock = join(dir, ".lock");
+        const nonce = acquireOwnedLock(lock, { retries: 1, retryMs: 0, staleMs: 10_000 })!;
+        expect(JSON.parse(readFileSync(join(lock, "owner"), "utf8")).ns).toBe(SELF_NS);
+        releaseOwnedLock(lock, nonce);
+      }));
+
+    it("zombie owner (exited, not reaped; same pid + start identity) → lock broken", () =>
+      withTempDir(async (dir) => {
+        // `sleep 0` exits; its parent becomes `sleep 5` via exec, which never reaps it → zombie
+        const parent = spawn("sh", ["-c", "sleep 0 & echo $!; exec sleep 5"], { stdio: ["ignore", "pipe", "ignore"] });
+        try {
+          const pid = Number(await new Promise<string>((r) => parent.stdout!.once("data", (d) => r(String(d).trim()))));
+          const isZombie = () => {
+            try {
+              const st = readFileSync(`/proc/${pid}/stat`, "utf8");
+              return st.slice(st.lastIndexOf(")") + 2).split(" ")[0] === "Z";
+            } catch {
+              return false;
+            }
+          };
+          for (let i = 0; i < 100 && !isZombie(); i++) await new Promise((r) => setTimeout(r, 20));
+          expect(isZombie()).toBe(true);
+          const start = processIdentity(pid);
+          expect(start).toBeDefined();
+          ownedLock(dir, { pid, start });
+          recordUsage({ dir, host: "h1", action: "list", now: H8 });
+          expect(existsSync(join(dir, "h1.json"))).toBe(true);
+        } finally {
+          parent.kill("SIGKILL");
+        }
+      }));
+
+    it.skipIf(!HAS_UNSHARE)("real pid namespaces (unshare): live holder inside is not broken from outside", () =>
+      withTempDir(async (dir) => {
+        const lock = join(dir, ".lock");
+        const code =
+          `import { acquireOwnedLock, releaseOwnedLock } from ${JSON.stringify(LOCK_SRC_URL)};` +
+          `const n = acquireOwnedLock(${JSON.stringify(lock)}, { retries: 1, retryMs: 0, staleMs: 10000 });` +
+          `const end = Date.now() + 3000; while (Date.now() < end) {}` +
+          `releaseOwnedLock(${JSON.stringify(lock)}, n);`;
+        const holder = spawn("unshare", ["-Urpf", "--mount-proc", process.execPath, "--experimental-strip-types", "--no-warnings", "--input-type=module", "-e", code], { stdio: "ignore" });
+        try {
+          for (let i = 0; i < 150 && !existsSync(join(lock, "owner")); i++) await new Promise((r) => setTimeout(r, 20));
+          const before = readFileSync(join(lock, "owner"), "utf8");
+          expect(acquireOwnedLock(lock, { retries: 5, retryMs: 20, staleMs: 10_000 })).toBeUndefined();
+          expect(readFileSync(join(lock, "owner"), "utf8")).toBe(before);
+        } finally {
+          await new Promise((r) => (holder.exitCode !== null ? r(null) : holder.once("exit", r)));
+        }
+      }), 15_000);
+
+    it.skipIf(!HAS_UNSHARE)("real pid namespaces (unshare): live holder outside is not broken from inside", () =>
+      withTempDir((dir) => {
+        const lock = join(dir, ".lock");
+        const nonce = acquireOwnedLock(lock, { retries: 1, retryMs: 0, staleMs: 10_000 })!;
+        try {
+          const code =
+            `import { acquireOwnedLock } from ${JSON.stringify(LOCK_SRC_URL)};` +
+            `console.log(String(acquireOwnedLock(${JSON.stringify(lock)}, { retries: 5, retryMs: 20, staleMs: 10000 })));`;
+          const r = spawnSync("unshare", ["-Urpf", "--mount-proc", process.execPath, "--experimental-strip-types", "--no-warnings", "--input-type=module", "-e", code], { encoding: "utf8" });
+          expect(r.stdout.trim()).toBe("undefined");
+          expect(JSON.parse(readFileSync(join(lock, "owner"), "utf8")).nonce).toBe(nonce);
+        } finally {
+          releaseOwnedLock(lock, nonce);
+        }
+      }), 15_000);
+
+    it("recordUsage releases its own lock (no owner file or lock dir left)", () =>
+      withTempDir((dir) => {
+        recordUsage({ dir, host: "h1", action: "list", now: H8 });
+        expect(existsSync(join(dir, ".lock"))).toBe(false);
       }));
   });
 
