@@ -8,7 +8,11 @@
  */
 
 import { mkdirSync, readFileSync, renameSync, rmdirSync, statSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+/** Root of this cmd-pallet checkout (src/..). */
+export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const LOCK_STALE_MS = 10_000;
 const LOCK_RETRIES = 50;
@@ -139,6 +143,14 @@ export function defaultUsageDir(repoRoot: string): string | undefined {
     // no .git → not a checkout; record in place
   }
   return resolve(repoRoot, "usage");
+}
+
+/**
+ * Usage dir for this process: `CMD_PALLET_USAGE_DIR`, else `<repo>/usage` (undefined in a linked worktree).
+ * Shared by recording and the `stats` verb so both look at the same files.
+ */
+export function resolveUsageDir(env: Record<string, string | undefined>): string | undefined {
+  return env.CMD_PALLET_USAGE_DIR || defaultUsageDir(REPO_ROOT);
 }
 
 /** Increment usage counters for one invocation. Never throws; gives up silently if the lock is busy. */

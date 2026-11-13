@@ -108,7 +108,7 @@ Every invocation is counted in JSON files inside this repo, so usage from all ma
 | `usage/<hostname>.json` | `{ "<hostname>": { "<action>": { "YYYY-MM-DDTHH": count } } }` |
 | `usage/<hostname>.cmds.json` | `{ "<hostname>": { "<cmd>": { "<action>": { "YYYY-MM-DDTHH": count } } } }` — `read`, `get`, `run` only |
 
-- `action` = verb name (`list`, `search`, `read`, `get`, `run`, `ping`, `sync`, `help`), plus `version` and `unknown`.
+- `action` = verb name (`list`, `search`, `read`, `get`, `run`, `ping`, `sync`, `stats`, `help`), plus `version` and `unknown`.
 - `<cmd>` = resolved command name (e.g. `read claude:deploy` → `deploy`); not found/ambiguous → name as typed.
 - Hour keys are UTC. One file per host, so machines never conflict in git.
 - After recording, a detached background worker commits `usage/*.json` and pushes (debounced). It never slows or fails the CLI; outcome per run is in `usage/.sync-log` (gitignored).
@@ -124,6 +124,19 @@ Callouts:
 | `CMD_PALLET_USAGE=0` | Disable recording and sync (the test suite sets this). |
 | `CMD_PALLET_USAGE_DIR` | Store elsewhere (no git sync unless it is `<repo>/usage`). |
 | `CMD_PALLET_USAGE_SYNC_MIN` | Sync debounce in minutes (default `10`; `0` = every invocation). |
+
+### `stats`
+Read-only report over all hosts' files in the usage dir (same dir as recording). Pull first to include other machines.
+```bash
+cmd-pallet stats                 # top 10
+cmd-pallet stats --top 20
+cmd-pallet stats --host bhd-pad1 # one machine only
+cmd-pallet stats --json          # { topCommands, byHost, byDateHour, byHourOfDay }
+```
+- **Top commands**: cmd, total, per-host split (from `*.cmds.json`, i.e. `read`/`get`/`run`).
+- **By machine**: host, total invocations, most-used action.
+- **By time**: most recent N UTC date-hours, plus totals per UTC hour of day.
+- Unreadable file → skipped with one stderr warning. Nothing recorded → `no usage recorded`, exit `0`.
 
 ## License
 
