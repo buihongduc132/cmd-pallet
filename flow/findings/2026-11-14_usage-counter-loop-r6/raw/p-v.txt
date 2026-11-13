@@ -1,0 +1,11 @@
+You are @V, the INDEPENDENT exit judge (read-only; do NOT edit files, do NOT commit) for one round of the spb-gotcha-and-strip-loop. Repo/worktree: /data/worktrees/cmd-pallet-wt--wt-usage-counter; HEAD must equal 56ea2c9a5637065fb5162e2bfcc417b18aead256 (verify with git rev-parse HEAD; untracked findings files are allowed).
+Read the loop contract: ~/.pi/agent/prompts/spb-gotcha-and-strip-loop.md (section "Exit judge" criteria (a) Coverage, (a2) Quality, (b) Simplest).
+Inputs on this SAME SHA:
+- Intentions (verbatim user words [U1]..[U6]): flow/intentions/2026-11-14_usage-counter.md (no separate design doc; its Elaboration section is the agreed design).
+- Plan: flow/plans/2026-11-14_usage-counter.md (note: the plan describes code already landed for r1-r4 and an "r5/r6 delta" still to be implemented after loop EXIT; judge the PLAN, not whether the delta is already coded).
+- Gotcha report: flow/findings/2026-11-14_usage-counter-loop-r6/gotcha.md
+- Tech-lead table: flow/findings/2026-11-14_usage-counter-loop-r6/tl.md
+- Strip table: flow/findings/2026-11-14_usage-counter-loop-r6/strip.md
+- Prior round context: flow/findings/2026-11-14_usage-counter-loop-r4/, flow/findings/2026-11-14_usage-counter-loop-r5/ and the plan's ledger.
+Reviewer reports are inputs, not proof: verify each claim against the plan text and the user words yourself.
+Answer: first line exactly EXIT or CONTINUE. Then (a), (a2), (b) each PASS/FAIL with reason, then numbered exact findings (what must change in the plan). Final line exactly: VERDICT=<EXIT|CONTINUE> OPEN=<n>.
