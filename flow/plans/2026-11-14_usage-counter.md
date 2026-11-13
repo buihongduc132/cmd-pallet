@@ -67,3 +67,12 @@ Stats verb [U6 "later on"]; pi `cmd_palette` tool in pi-cmd-palette repo (separa
 
 ## Final verification
 `npx tsc --noEmit`, `npx vitest run` all green; real E2E of Task 4; `superpower-requesting-code-review` on the branch diff; merge `wt/usage-counter` → `main`, push.
+
+## GC landing
+Rig `cmd-pallet` (prefix `cpal`, suspended). Epic `cpal-qp8`. Convoy `cpal-1mj` (owned, target `wt/usage-counter`, merge local).
+| Task | bead | convoy | edges |
+|---|---|---|---|
+| T1 usage store | cpal-qp8.1 | cpal-1mj | — |
+| T2 wire runCli | cpal-qp8.2 | cpal-1mj | blocked-by .1 (consumes `recordUsage`) |
+| T3 git sync | cpal-qp8.3 | cpal-1mj | blocked-by .2 (extends `recordInvocation`) |
+| T4 README + E2E | cpal-qp8.4 | cpal-1mj | blocked-by .3 (needs full pipeline) |
