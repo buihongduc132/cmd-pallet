@@ -61,11 +61,11 @@ Files: create `src/usage-sync.ts` (worker entry: `node --experimental-strip-type
 
 ## Task 4 — docs + real E2E [U5][U6]
 Files: modify `README.md` (Usage tracking section: files, shape, env knobs, merge model incl. sum merge driver, `stats`, callouts: sync merges origin/main into the live checkout; background commit briefly holds `index.lock`; linked worktrees do not record by default; machines sharing a hostname are summed under that one hostname; a manual `git pull` outside the worker has no driver defined → plain text merge, may conflict on a same-hostname file). [U5 "keep track"][G5]
-- Real E2E after merge to `main`, in the `main` checkout of any machine (host = `os.hostname()`, H = current UTC date-hour, C = `<agent>:<name>` of the cmd read) [U1][U4][U5][G7]:
-  1. `git fetch`; `B = origin/main:usage/<host>.cmds.json [host][C].read[H]` via `git show` (0 if absent); `T0` = now.
-  2. `CMD_PALLET_USAGE_SYNC_MIN=0 cmd-pallet read <C>` → local `usage/<host>.cmds.json` has `[host][C].read[H]` = local-before + 1.
+- Real E2E after merge to `main` (see Final verification order), in the `main` checkout of any machine (host = `os.hostname()`, H = current UTC date-hour, K = `e2e-<T0 epoch ms>` — a name no catalog has, so `read K` takes the not-found path and records K "as typed" per the Data contract; no other invocation can ever write K) [U1][U4][U5][G7][G9]:
+  1. `git fetch`; `T0` = now; assert `git show origin/main:usage/<host>.cmds.json` has no `[host][K]` (absent by construction).
+  2. `CMD_PALLET_USAGE_SYNC_MIN=0 cmd-pallet read K` (exit code non-zero is expected: not found) → local `usage/<host>.cmds.json` has `[host][K].read[H]` = 1.
   3. Wait (≤ 2 min) for a `usage/.sync-log` line `ok:` stamped ≥ `T0`; none → FAIL.
-  4. `git fetch`; `A` = same lookup on origin/main. PASS only if `A ≥ B + 1` AND a commit reachable from origin/main after `T0` has subject `chore(usage): <host> <iso ≥ T0>`. A stale earlier same-host commit gives `A = B` → FAIL (the exact-count check is what rejects it).
+  4. `git fetch`; PASS only if origin/main `usage/<host>.cmds.json` `[host][K].read[H]` = 1 exactly AND `git log origin/main --since=<T0> -S '"K"' -- usage/<host>.cmds.json` returns ≥ 1 commit with subject `chore(usage): <host> <iso ≥ T0>`. Concurrent same-host invocations/syncs (G9) cannot write K, so they can neither satisfy nor mask this check; a stale earlier commit cannot contain K (G7).
 
 ## Task 5 — `stats` verb [U6]
 Files: create `src/usage-stats.ts` (pure: read `usage/*.json` + `usage/*.cmds.json` of ALL hosts → aggregate), modify `src/verbs.ts` (verb `stats`, no flags), `src/dispatch.ts` (route), test `tests/usage-stats.test.ts`, README Usage tracking section. [U6 "having stats"]
@@ -77,13 +77,17 @@ Files: create `src/usage-stats.ts` (pure: read `usage/*.json` + `usage/*.cmds.js
   3. **By time**: date-hour (UTC) | total across hosts, most recent 10 rows; plus hour-of-day (00–23 UTC) totals. [U6 "time"]
 - File accepted only when ALL hold: JSON object; exactly one top-level key equal to the filename host stem; action file depth 3 / cmds file depth 4 of plain objects; every leaf key matches `^\d{4}-\d{2}-\d{2}T\d{2}$` AND is a real UTC calendar date-hour (`new Date(Date.UTC(y, m−1, d, h))` formats back to the same key, so month 13, day 30 of Feb, hour 24 fail) [G8], and every value is a positive safe integer. Any violation → whole file skipped with one stderr warning naming it (no partial counts). Empty/missing dir → "no usage recorded" exit 0. [U6 "stats on which cmd ... machine , time" must not count garbage]
 - RED: fixture usage dir with 2 hosts → exact top-command order, per-host totals, date-hour and hour-of-day sums; corrupt JSON skipped; `{ "hostA": { "list": { "not-a-date": -2 } } }` in `hostA.json` → warning + zero contribution; host key ≠ filename → skipped; wrong depth → skipped; `2026-99-99T99` and `2026-02-30T00` leaf keys → warning + zero contribution [G8]; empty dir; `stats --top 3` → usage error (flag gone). [U6]
-- Real E2E [U5][U6][G7]: after Task 4 PASS, `git clone <origin url> <fresh tmp dir>` (no local state) and there run `CMD_PALLET_USAGE=0 node bin/cmd-pallet.js stats` → Top commands row for `C` has per-host count for `<host>` ≥ `A`'s contribution and By machine lists `<host>`; i.e. the increment is proven through `stats` on the REMOTE data, not the local file. Multi-host merge itself is proven by Task 3's two-clone RED.
+- Real E2E [U5][U6][G7]: after Task 4 PASS, `git clone <origin url> <fresh tmp dir>` (no local state) and there run `CMD_PALLET_USAGE=0 node bin/cmd-pallet.js stats` → By machine row for `<host>` total = sum of all leaves of that clone's `usage/<host>.json` (computed independently with `node -e` over the file), and Top commands / By time sections render from the same files; i.e. `stats` is proven on the REMOTE merged data, not the local file. K's arrival on the remote is proven by Task 4 (K is count 1, below the top-10 cap, so it is not asserted through `stats`). Multi-host merge itself is proven by Task 3's two-clone RED.
 
 ## Out of scope
 - pi `cmd_palette` tool in pi-cmd-palette repo (separate code path; does not invoke this CLI) — callout only, no [U#] asks for it.
 
 ## Final verification [U1][U2][U5][U6]
-`npx tsc --noEmit`, `npx vitest run` all green; real E2E of Task 4 + Task 5; `superpower-requesting-code-review` on the branch diff; merge `wt/usage-counter` → `main`, push.
+Order is fixed [TL-2]:
+1. Pre-merge, in the pinned worktree: `npx tsc --noEmit`, `npx vitest run` all green; `git status --porcelain usage/` empty. [U1][U2][U6]
+2. Merge `wt/usage-counter` → `main`, push. Required, not release ceremony: the sync worker runs only on `main` tracking `origin/main` (Task 3 step 0, [U1] elaboration), so recording + commit/push of usage exists only once the code is on `main`. [U1 "inside the cmd-pallet repository itself , this will tracked and commit and push"][U5]
+3. Then, in the `main` checkout: Task 4 real E2E, then Task 5 real E2E. [U5][U6]
+No separate code-review step (no [U#] asks for one) [OE4].
 
 ## GC landing
 Rig `cmd-pallet` (prefix `cpal`, suspended). Epic `cpal-qp8`. Convoy `cpal-1mj` (owned, target `wt/usage-counter`, merge local).
@@ -95,7 +99,7 @@ Rig `cmd-pallet` (prefix `cpal`, suspended). Epic `cpal-qp8`. Convoy `cpal-1mj` 
 | T4 README + E2E | cpal-qp8.4 | cpal-1mj | blocked-by .3 (needs full pipeline) | 1acac53 |
 | bug push race (T3 step 5) | cpal-qp8.5 | — | discovered-from .3 | bbf428d |
 | T5 stats verb | cpal-qp8.6 | — | reads files produced by .1/.3 | a684f92 |
-| r5–r7 delta: T1 (G6 owned lock), T2 (TL-1 key, G3 bin E2E), T3 (G1 stamp, G4 guards, G5/OE3 sum merge driver, G6 sync lock), T4 (G5 README, G7 exact-count E2E), T5 (G2/G8 schema, G7 clean-clone stats, OE2 flag drop) | land via `/spb-plan-to-gc` after loop EXIT [U1..U6 per Task] | cpal-1mj | per parent Task | — |
+| r5–r8 delta: T1 (G6 owned lock), T2 (TL-1 key, G3 bin E2E), T3 (G1 stamp, G4 guards, G5/OE3 sum merge driver, G6 sync lock), T4 (G5 README, G7/G9 unique-key exact-count E2E), T5 (G2/G8 schema, G7 clean-clone stats, OE2 flag drop), Final verification order (TL-2, OE4) | land via `/spb-plan-to-gc` after loop EXIT [U1..U6 per Task] | cpal-1mj | per parent Task | — |
 
 ## Gate ledger (pre-loop history)
 | Plan rev | (a) covered | (b) simplest | @V |
