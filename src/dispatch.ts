@@ -11,6 +11,29 @@ import { searchCommands } from "./fuzzy.ts";
 import { syncSlashCommands } from "./sync.ts";
 import { EXIT_CODES, type IoStreams } from "./types.ts";
 import { formatHelp, formatHelpJson, getVerb } from "./verbs.ts";
+import { resolveUsageDir } from "./usage.ts";
+import { computeStats, formatStats, isEmptyStats } from "./usage-stats.ts";
+
+const STATS_DEFAULT_TOP = 10;
+
+/** Parse `stats` options from positionals (`--top N`, `--top=N`, `--host H`, `--host=H`). */
+function parseStatsArgs(args: string[]): { top: number; host?: string } | { error: string } {
+  let top = STATS_DEFAULT_TOP;
+  let host: string | undefined;
+  for (let i = 0; i < args.length; i++) {
+    const m = /^--(top|host)(?:=(.*))?$/.exec(args[i]);
+    if (!m) return { error: `Unexpected argument: ${args[i]}` };
+    const value = m[2] ?? args[++i];
+    if (value === undefined || value === "") return { error: `Missing value for --${m[1]}` };
+    if (m[1] === "host") {
+      host = value;
+    } else {
+      if (!/^\d+$/.test(value) || Number(value) < 1) return { error: `--top must be a positive integer, got: ${value}` };
+      top = Number(value);
+    }
+  }
+  return { top, host };
+}
 
 export async function dispatch(
   argv: string[],
@@ -61,6 +84,31 @@ export async function dispatch(
       stdout.write(JSON.stringify(formatHelpJson(), null, 2) + "\n");
     } else {
       stdout.write(formatHelp() + "\n");
+    }
+    return EXIT_CODES.OK;
+  }
+
+  if (canonicalVerb === "stats") {
+    const opts = parseStatsArgs(positional);
+    if ("error" in opts) {
+      if (isJson) {
+        stdout.write(JSON.stringify({ error: opts.error }, null, 2) + "\n");
+      } else {
+        stderr.write(`${opts.error}\nUsage: ${verbDef.usage}\n`);
+      }
+      return EXIT_CODES.USAGE_ERROR;
+    }
+    const dir = resolveUsageDir(env);
+    const stats = dir
+      ? computeStats(dir, { ...opts, warn: (m) => stderr.write(m) })
+      : { topCommands: [], byHost: [], byDateHour: [], byHourOfDay: [] };
+    if (isJson) {
+      stdout.write(JSON.stringify(stats, null, 2) + "\n");
+    } else if (isEmptyStats(stats)) {
+      const where = dir ?? "(none: linked worktree — set CMD_PALLET_USAGE_DIR)";
+      stdout.write(`no usage recorded${opts.host ? ` for host ${opts.host}` : ""} in ${where}\n`);
+    } else {
+      stdout.write(formatStats(stats, opts.top) + "\n");
     }
     return EXIT_CODES.OK;
   }

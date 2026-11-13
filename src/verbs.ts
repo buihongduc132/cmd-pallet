@@ -49,6 +49,12 @@ export const VERBS: Record<string, VerbDefinition> = {
     usage: "cmd-pallet sync [outdir] [--dry-run] [--json]",
     acceptsJson: true,
   },
+  stats: {
+    name: "stats",
+    description: "Usage stats from usage/*.json of all machines: top commands, by machine, by time (UTC)",
+    usage: "cmd-pallet stats [--top N] [--host H] [--json]",
+    acceptsJson: true,
+  },
   help: {
     name: "help",
     description: "Display CLI usage and environment variables",
