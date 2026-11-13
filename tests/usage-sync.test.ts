@@ -319,3 +319,39 @@ describe("maybeSync", () => {
     ).not.toThrow();
   });
 });
+
+describe("syncUsage push race (cpal-qp8.5)", () => {
+  it("another host pushes between A's merge and push → A re-fetches, merges, pushes; remote has both", () => {
+    const { remote, a, b } = fixture();
+    writeUsage(a, "A");
+    let raced = 0;
+    const outcome = syncUsage(a, {
+      beforePush: () => {
+        if (raced++ === 0) pushFromB(b);
+      },
+    });
+    expect(raced).toBeGreaterThanOrEqual(2);
+    expect(outcome).toMatch(/^ok: /);
+    const tree = remoteTree(remote);
+    expect(tree).toContain("usage/A.json");
+    expect(tree).toContain("usage/B.json");
+    expect(git(a, "rev-list", "--count", "@{u}..HEAD")).toBe("0");
+  });
+
+  it("push keeps losing the race → bounded retries, then stop: push failed (usage stays committed locally)", () => {
+    const { a, b } = fixture();
+    writeUsage(a, "A");
+    let n = 0;
+    const outcome = syncUsage(a, {
+      beforePush: () => {
+        n++;
+        mkdirSync(join(b, "usage"), { recursive: true });
+        writeFileSync(join(b, "usage", "B.json"), JSON.stringify({ B: { list: { [`2026-11-14T0${n}`]: n } } }) + "\n");
+        syncUsage(b);
+      },
+    });
+    expect(outcome).toBe("stop: push failed");
+    expect(n).toBe(3);
+    expect(git(a, "log", "--format=%s", "-20")).toMatch(/chore\(usage\)/);
+  });
+});
