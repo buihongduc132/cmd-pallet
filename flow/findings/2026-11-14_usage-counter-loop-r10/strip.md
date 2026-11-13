@@ -1,0 +1,26 @@
+---
+title: usage-counter loop r10 — strip
+date: 2026-11-14
+tags: [findings, spb/loop, cmd-pallet/usage]
+plan_sha: da1c743243ab0e16a597b80aca35aef64387258b
+reviewer: codex exec read-only 0m 01a1d6b3-d7fd-74a3-b7b6-db501cb3987a
+---
+
+| Your exact words | Files and lines | Required work |
+|---|---|---|
+| [U1] “make the json storage (inside the cmd-pallet repository itself , this will tracked and commit and push all changes as well).” | `flow/plans/2026-11-14_usage-counter.md:13-15,25-29,48-68,86-90` | Keep repo-local JSON storage and usage-only sync; verify a new count reaches `origin/main`. |
+| [U2] “per invokation of any action of cmd-pallet , make the counter of these usage” | `flow/plans/2026-11-14_usage-counter.md:34-46` | Count each invocation once; preserve the CLI result if recording fails. |
+| [U3] “{ <hostname>: { <action>: { date-hour: count } } ( keep increase it and group per date-hour per action ;” | `flow/plans/2026-11-14_usage-counter.md:17-23,33-39` | Keep per-host, per-action UTC date-hour counts in the specified shape. |
+| [U4] “ALSO for invoke that read 1 cmd , must having storage like that put what cmd being read.” | `flow/plans/2026-11-14_usage-counter.md:19,44-45,64-68` | Store the invoked command under its resolved agent-qualified key; verify its remote count. |
+| [U5] “This is for us to keep track and also merged usage between multiple machine utilizing git.” | `flow/plans/2026-11-14_usage-counter.md:20-22,48-68,80,88-90` | Sync usage through git and verify distinct-host merging and remote readback. |
+| [U6] “And also later on having stats on which cmd being use most , and which machine , time.” | `flow/plans/2026-11-14_usage-counter.md:70-80,89-90` | Show command, machine, and time summaries from merged usage in a clean-clone E2E. |
+
+**[OE1] G13 break-mutex recovery is not fully serialized.** At plan line 35, two breakers can both observe an aged `<lock>.break`; one can remove it after the other creates a fresh mutex, then create its own mutex. That recreates the race the mutex is meant to prevent. Replace stale-mutex deletion with an atomic ownership transfer/removal that cannot remove a newly acquired mutex, and retain the race RED. This is needed to protect [U2] counts from being lost. The mutex is a reasonable minimal direction; the specified stale cleanup is not yet a compliant implementation.
+
+**[OE2] Same-host fail-safe test is outside the stated precondition.** Plan lines 22 and 60 test clones with the same hostname, while the intention defines hostname as the machine key and the plan requires distinct hostnames. The arbiter decision defers same-host collision handling. Remove the same-host-specific RED assertions; keep the distinct-host merge proof and existing generic merge-failure safety. This avoids making an unsupported case an execution obligation.
+
+**OE1–OE4 from rounds 4–9 rechecked:** the 30-second push target and named-host acceptance are absent; optional stats flags are dropped; same-host recovery/merge is not required; and the separate code-review step is removed. Those earlier OEs remain resolved.
+
+**Verdict: REJECT / re-plan this plan at the same artifact.** The exact remote E2E and distinct-host merge preserve the requested outcomes. G13 needs a race-safe mutex recovery, and the same-host-specific test adds work beyond the stated precondition. Cost estimate for the remaining delta: G13 repair and race test about 0.5–1 engineering day; same-host assertions removed, saving roughly 0.25–0.5 day of test and upkeep. Historical implementation costs are sunk; no reliable measured initial-versus-stripped totals are available. BAN_SCAN: PASS · `da1c743243ab0e16a597b80aca35aef64387258b` · `/home/bhd/.pi/agent/prompts/_references/plan/BANNED-planning-theater-inflation.md` · 2026-11-14.
+
+OPEN_OE=2

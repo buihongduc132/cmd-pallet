@@ -1,0 +1,27 @@
+---
+title: usage-counter loop r10 — gotcha
+date: 2026-11-14
+tags: [findings, spb/loop, cmd-pallet/usage]
+plan_sha: da1c743243ab0e16a597b80aca35aef64387258b
+reviewer: codex exec read-only 0m 01a1d6b3-d820-78a2-b0f3-265ce50f51aa
+---
+
+| id | rank 1-5 | trigger | wrong result | safeguard | assertion that fails today | resolved-in-plan? yes(where)/deferred(where)/NO |
+|---|---:|---|---|---|---|---|
+| G1 | 3 | Worker spawn fails | Debounce stamp prevents retrying sync | Stamp only after successful spawn | Make spawn throw; assert a second call within the window spawns | yes(Task 3: spawn-failure case) |
+| G2 | 3 | Stats reads malformed nested data or invalid counts | Invalid rows enter totals | Validate the whole file; warn and skip it on any violation | Feed malformed host data; assert warning and zero contribution | yes(Task 5: file rules and malformed-data cases) |
+| G3 | 3 | User invokes the published CLI entrypoint | `runCli` passes while the executable fails to record usage | Test the spawned binary with an isolated store | Run `bin/cmd-pallet.js list`; assert one persisted count and matching output | yes(Task 2: spawned-binary case) |
+| G4 | 3 | `main` upstream changes before merge | Worker merges from an unapproved upstream | Re-run all guards immediately before merge | Change upstream in `beforeMerge`; assert no merge or push | yes(Task 3: upstream guard recheck and test) |
+| G5 | 4 | Two machines use the same hostname | They share a file; a conflicting sync stops, leaving the remote without that clone’s usage | Treat distinct hostnames as a precondition; abort only the worker’s merge, preserve local counts and commit, and document recovery | Give two clones the same hostname; assert the losing clone retains its local count and usage commit, aborts the merge, and does not change the remote | yes(Data contract and Task 3 fail-safe case; automatic shared-file merge deferred to cpal-qp8.10) |
+| G6 | 3 | A writer holds a usage lock beyond the stale threshold | Another invocation removes a live lock and loses an increment | Break a lock only when its owner is provably gone; share the owned-lock helper | Hold a live lock past the threshold; assert it remains and final count is 2 | yes(Task 1 and Task 3: owned-lock rules and cases) |
+| G7 | 3 | An older same-host usage commit is already remote | E2E accepts an old commit although the current increment never reaches remote | Check the exact remote count and a post-start commit; read stats in a clean clone | Keep an older remote commit and reject the current push; assert Task 4/5 acceptance fails | yes(Task 4: exact count and post-`T0` commit; Task 5: clean-clone stats) |
+| G8 | 2 | Stats reads a regex-matching but impossible date-hour | Invalid time data enters aggregates | Require a real UTC date-hour round-trip | Feed `2026-99-99T99` and `2026-02-30T00`; assert warning and zero contribution | yes(Task 5: calendar validation and invalid-date cases) |
+| G9 | 3 | Another same-host invocation syncs during Task 4 E2E | Its increment and commit satisfy checks for the tested invocation | Use a unique not-found key written by no other invocation | Suppress the tested invocation’s sync while a concurrent invocation records and syncs; assert Task 4 fails | yes(Task 4: unique `K` and exact remote count) |
+| G10 | 3 | Global environment sets `CMD_PALLET_USAGE=0` during Task 4 E2E | The command records nothing despite valid code | Explicitly set `CMD_PALLET_USAGE=1` for the E2E invocation | Run Task 4 with inherited `CMD_PALLET_USAGE=0`; assert it records `K` and reaches remote | yes(Task 4: forced environment and RED case) |
+| G11 | 2 | Two Task 4 E2E runs start in the same millisecond | Both use the same key; one run affects the other’s exact-count check | Add a per-run random component to `K` | Start two E2Es with the same `T0`; assert their keys differ and each remote count is exactly 1 | yes(Task 4: random `K` and RED case) |
+| G12 | 3 | Lock PID is reused after its owner exits | A stale lock appears live and blocks recording or sync | Pair PID with process start identity and namespace; test PID reuse | Simulate a reused PID; assert a new invocation neither hangs nor loses its count | yes(Task 1: owner identity rules and PID-reuse case) |
+| G13 | 4 | Two stale-lock breakers race to remove and reacquire the same lock | A breaker removes a newly acquired lock, allowing concurrent writes and lost counts | Serialize breaking with `<lock>.break`; recheck staleness and nonce before removal | Trigger B1 acquisition from B2’s `beforeBreak`; assert at most one receives a nonce and the owner nonce matches it | yes(Task 1: serialized break and breaker-race RED case) |
+| N1 | 4 | A breaker pauses while holding `<lock>.break` longer than `staleMs` | A second breaker age-removes the live mutex and can break the same stale lock concurrently | Make stale mutex recovery prove its owner is gone, or otherwise prevent age-based removal of a live breaker | Pause B1 holding `.break` beyond `staleMs`; assert B2 cannot remove the mutex or enter the break section | NO |
+| N2 | 3 | A process pauses after creating the lock directory but before writing `owner` | Another process treats the temporarily ownerless lock as stale and breaks a live writer’s lock | Publish ownership atomically, or protect the ownerless creation window before applying the age rule | Pause after `mkdir` before owner write past `staleMs`; assert another acquisition does not break the live writer’s lock | NO |
+
+OPEN_RANK3PLUS=2
