@@ -17,15 +17,17 @@ All Tasks run in the pinned worktree (`git -C /data/worktrees/cmd-pallet-wt--wt-
 ## Data contract [U3][U4]
 - `usage/<hostname>.json` → `{ "<hostname>": { "<action>": { "YYYY-MM-DDTHH": n } } }` [U3]
 - `usage/<hostname>.cmds.json` → `{ "<hostname>": { "<cmd>": { "<action>": { "YYYY-MM-DDTHH": n } } } }` — only `read`, `get`, `run` (verbs that take one cmd); `<cmd>` = `<agent>:<name>` of the resolved command (same `agent:name` form the CLI already prints for ambiguous candidates), else the name as typed (not found / ambiguous). Two agents' same-named cmds stay separate rows. Keys recorded before r5 (bare name) are left as-is and show as their own rows (no migration). [U4 "put what cmd being read"][TL-1]
-- date-hour = UTC. hostname = `os.hostname()`. action per intention elaboration of [U2]. [U3][U5 "between multiple machine" → one clock]
+- date-hour = UTC. hostname = `CMD_PALLET_USAGE_HOST` if set, else `os.hostname()` (one resolver `usageHost(env)` in `src/usage.ts`, used by record, sync commit message and collision check). action per intention elaboration of [U2]. [U3][U5 "between multiple machine" → one clock, one name per machine]
 - One file per host → two machines never edit the same file → git merge never conflicts. [U5 "merged usage between multiple machine utilizing git"]
+- Same-hostname collision (two machines resolve the same host name): sync detects it (Task 3 step 4) and stops before any merge/push for that machine, logging `collision: <host>` to `usage/.sync-log`; both machines keep their counts (remote file + local commit), nothing conflicts. Fix = set `CMD_PALLET_USAGE_HOST=<unique>` on one machine; its counts then go to its own file (counts already in the old local commit stay local, not merged — accepted, README callout). [U5 "merged usage between multiple machine"][G5]
 - Keys written sorted → stable diffs. [U1 "commit and push all changes"]
 
 ## Env knobs
 - `CMD_PALLET_USAGE=0` → disable record + sync; whole test suite sets it via `vitest.config.ts` `test.env` (suite must never write or commit the real store). [U1 "this will tracked and commit"]
 - `CMD_PALLET_USAGE_DIR` → override store dir (default `<repo>/usage`, repo = parent of `src/`; a linked worktree (`.git` is a file) has NO default store → records only with this env set, so worktree runs never create usage files that later conflict with main). [U1][U5]
 - `CMD_PALLET_USAGE_SYNC_MIN` → debounce minutes (default 10; invalid/negative → default). [U1 "commit and push" without slowing every invocation]
-- All three read in ONE place (`recordInvocation` in `src/cli.ts` + `resolveUsageDir` in `src/usage.ts`, shared by record and `stats`). [U2][U6]
+- `CMD_PALLET_USAGE_HOST` → host identity override (empty/unset → `os.hostname()`; must match `^[A-Za-z0-9._-]+$` else ignored). Only remedy for a same-hostname collision. [U5][G5]
+- All four read in ONE place (`recordInvocation` in `src/cli.ts` + `resolveUsageDir`/`usageHost` in `src/usage.ts`, shared by record, sync and `stats`). [U2][U5][U6]
 
 ## Task 1 — usage store [U1][U3][U4]
 Files: create `src/usage.ts`, `tests/usage.test.ts`.
@@ -33,7 +35,8 @@ Files: create `src/usage.ts`, `tests/usage.test.ts`.
 - `actionOf(verb, flags, known)` → action string per [U2] elaboration (`--help`/no verb → `help`, `--version` → `version`, unknown verb → `unknown`). [U2 "any action"]
 - `recordUsage({dir, host, action, cmd?, now})`: lock (`mkdir <dir>/.lock`, stale after 10 s, retry ≤ 50 × 20 ms; give up silently), read JSON (missing/corrupt → `{}`; corrupt file renamed `*.corrupt-<ts>`), increment, write sorted JSON to tmp + `rename`. [U3 "keep increase it"][U1]
 - Store objects are null-prototype and walked by own keys only → a cmd/host named `__proto__`/`constructor` is stored as a plain key, never pollutes prototypes. [U4 "put what cmd being read" — cmd name is user input]
-- RED first: key format; first increment; repeated increment same hour; new hour new key; cmds file only when `cmd` given; 20 parallel `recordUsage` calls → count 20; corrupt file recovery; `__proto__` cmd name stored as key. [U3][U4]
+- `usageHost(env)` → override when valid, else `os.hostname()`. [U5][G5]
+- RED first: key format; `usageHost` override / invalid override ignored; first increment; repeated increment same hour; new hour new key; cmds file only when `cmd` given; 20 parallel `recordUsage` calls → count 20; corrupt file recovery; `__proto__` cmd name stored as key. [U3][U4]
 - Pass: `npx vitest run tests/usage.test.ts`. [U3]
 
 ## Task 2 — wire into CLI [U2][U4]
@@ -51,14 +54,14 @@ Files: create `src/usage-sync.ts` (also worker entry: `node --experimental-strip
   1. `git add -- usage/*.json`; nothing staged for usage → no commit (still try push of earlier usage commits). [U1]
   2. `git commit -m "chore(usage): <host> <iso>" -- usage/` (commits ONLY usage paths; other dirty files untouched). [U1 "commit ... all changes" of the store only]
   3. `git fetch origin`. HEAD has commits ahead of `@{u}` touching paths outside `usage/` → stop (never push someone else's unpushed work; local usage commit stays, pushed by a later sync). [U5]
-  4. If behind: re-run the FULL step-0 `guards(repoDir)` incl. upstream identity, as the last check before merge (checkout is shared; state may have changed), pin `target = rev-parse @{u}`, `git merge --no-edit <target>`. On failure run `git merge --abort` ONLY when MERGE_HEAD did not exist before and now equals `target` (never abort a merge someone else started); stop. ACCEPTED: this pulls origin/main into the live checkout like `git pull` would (README callout). [U5]
+  4. If behind: collision check first — `git log --format=%H HEAD..@{u} -- usage/<host>.json usage/<host>.cmds.json` (host = `usageHost(env)`) non-empty means another machine wrote this host's files → log `collision: <host>` and stop (no merge, no push; local usage commit kept). [U5][G5] Then re-run the FULL step-0 `guards(repoDir)` incl. upstream identity, as the last check before merge (checkout is shared; state may have changed), pin `target = rev-parse @{u}`, `git merge --no-edit <target>`. On failure run `git merge --abort` ONLY when MERGE_HEAD did not exist before and now equals `target` (never abort a merge someone else started); stop. ACCEPTED: this pulls origin/main into the live checkout like `git pull` would (README callout). [U5]
   5. `git push origin main`. Rejected (another host pushed first) → back to step 3, max 3 attempts total, then stop (next debounce retries). [U5 "merged usage between multiple machine"; live race 2026-11-14, cpal-qp8.5]
   6. Append one outcome line to `usage/.sync-log` (gitignored). [U1]
-- RED: temp bare remote + 2 clones (host A, host B), each records + `syncUsage` → remote tree has `usage/A.json` and `usage/B.json`, no conflict; unrelated dirty file stays dirty + uncommitted; non-main branch → no commit; rebase in progress → no commit; local non-usage commit ahead → usage committed but NOT pushed; stale `.sync-lock` → still syncs; foreign merge started between guards and merge → not aborted; push race (other host pushes in `beforePush`) → resolved within 3 attempts, and bounded at 3; debounce: second `maybeSync` within window does not spawn; `spawnImpl` throws → no `.sync-stamp` written, next `maybeSync` within window spawns [U1]; upstream of `main` changed to another remote in `beforeMerge` → no merge, no push [U5]. [U1][U5]
+- RED: temp bare remote + 2 clones (host A, host B), each records + `syncUsage` → remote tree has `usage/A.json` and `usage/B.json`, no conflict; unrelated dirty file stays dirty + uncommitted; non-main branch → no commit; rebase in progress → no commit; local non-usage commit ahead → usage committed but NOT pushed; stale `.sync-lock` → still syncs; foreign merge started between guards and merge → not aborted; push race (other host pushes in `beforePush`) → resolved within 3 attempts, and bounded at 3; debounce: second `maybeSync` within window does not spawn; `spawnImpl` throws → no `.sync-stamp` written, next `maybeSync` within window spawns [U1]; upstream of `main` changed to another remote in `beforeMerge` → no merge, no push [U5]; same-hostname collision: clones A and B both with `CMD_PALLET_USAGE_HOST=same`, A records + syncs, B records + syncs → B logs `collision: same`, no merge in progress, no conflict markers, remote `usage/same.json` keeps A's count and B's HEAD keeps B's count; then B with `CMD_PALLET_USAGE_HOST=same2` records + syncs → remote has `same.json` (A) and `same2.json` (B) [G5]. [U1][U5]
 
 ## Task 4 — docs + real E2E [U5][U6]
-Files: modify `README.md` (Usage tracking section: files, shape, env knobs, merge model, `stats`, callouts: sync merges origin/main into the live checkout; background commit briefly holds `index.lock`; linked worktrees do not record by default). [U5 "keep track"]
-- Real run on this host after merge to `main`: `CMD_PALLET_USAGE_SYNC_MIN=0 cmd-pallet read spb-plan` → `usage/$(hostname).json` + `.cmds.json` show counts (cmd key `<agent>:spb-plan`); after the worker finishes (`usage/.sync-log` gains an `ok:` line), `git fetch && git log origin/main -1 --format=%s -- usage/` shows `chore(usage): <this host>`. [U1][U4][U5]
+Files: modify `README.md` (Usage tracking section: files, shape, env knobs, merge model, `stats`, callouts: sync merges origin/main into the live checkout; background commit briefly holds `index.lock`; linked worktrees do not record by default; same-hostname collision → set `CMD_PALLET_USAGE_HOST`). [U5 "keep track"][G5]
+- Real E2E after merge to `main`, in the `main` checkout of any machine: `CMD_PALLET_USAGE_SYNC_MIN=0 cmd-pallet read <any existing cmd>` → `usage/<host>.json` + `.cmds.json` (host = `usageHost`) gain the counts with cmd key `<agent>:<name>`; once `usage/.sync-log` gains an `ok:` line, `git fetch && git log origin/main -1 --format=%s -- usage/` shows `chore(usage): <host>`. [U1][U4][U5]
 
 ## Task 5 — `stats` verb [U6]
 Files: create `src/usage-stats.ts` (pure: read `usage/*.json` + `usage/*.cmds.json` of ALL hosts → aggregate), modify `src/verbs.ts` (verb `stats`, no flags), `src/dispatch.ts` (route), test `tests/usage-stats.test.ts`, README Usage tracking section. [U6 "having stats"]
@@ -70,13 +73,13 @@ Files: create `src/usage-stats.ts` (pure: read `usage/*.json` + `usage/*.cmds.js
   3. **By time**: date-hour (UTC) | total across hosts, most recent 10 rows; plus hour-of-day (00–23 UTC) totals. [U6 "time"]
 - File accepted only when ALL hold: JSON object; exactly one top-level key equal to the filename host stem; action file depth 3 / cmds file depth 4 of plain objects; every leaf key matches `^\d{4}-\d{2}-\d{2}T\d{2}$` and every value is a positive safe integer. Any violation → whole file skipped with one stderr warning naming it (no partial counts). Empty/missing dir → "no usage recorded" exit 0. [U6 "stats on which cmd ... machine , time" must not count garbage]
 - RED: fixture usage dir with 2 hosts → exact top-command order, per-host totals, date-hour and hour-of-day sums; corrupt JSON skipped; `{ "hostA": { "list": { "not-a-date": -2 } } }` in `hostA.json` → warning + zero contribution; host key ≠ filename → skipped; wrong depth → skipped; empty dir; `stats --top 3` → usage error (flag gone). [U6]
-- Real run: `cmd-pallet stats` on this host after `git pull` shows one "By machine" row per `usage/<host>.json` present in the checkout (row count == file count). [U5][U6]
+- Real E2E: in the same `main` checkout after `git pull`, `cmd-pallet stats` lists the Task 4 cmd key under Top commands and `<host>` under By machine (reads the merged dir, not only the local file — multi-host merge itself is proven by Task 3's two-clone RED). [U5][U6]
 
 ## Out of scope
 - pi `cmd_palette` tool in pi-cmd-palette repo (separate code path; does not invoke this CLI) — callout only, no [U#] asks for it.
 
 ## Final verification [U1][U2][U5][U6]
-`npx tsc --noEmit`, `npx vitest run` all green; real E2E of Task 4 + Task 5 real run; `superpower-requesting-code-review` on the branch diff; merge `wt/usage-counter` → `main`, push.
+`npx tsc --noEmit`, `npx vitest run` all green; real E2E of Task 4 + Task 5; `superpower-requesting-code-review` on the branch diff; merge `wt/usage-counter` → `main`, push.
 
 ## GC landing
 Rig `cmd-pallet` (prefix `cpal`, suspended). Epic `cpal-qp8`. Convoy `cpal-1mj` (owned, target `wt/usage-counter`, merge local).
@@ -88,7 +91,7 @@ Rig `cmd-pallet` (prefix `cpal`, suspended). Epic `cpal-qp8`. Convoy `cpal-1mj` 
 | T4 README + E2E | cpal-qp8.4 | cpal-1mj | blocked-by .3 (needs full pipeline) | 1acac53 |
 | bug push race (T3 step 5) | cpal-qp8.5 | — | discovered-from .3 | bbf428d |
 | T5 stats verb | cpal-qp8.6 | — | reads files produced by .1/.3 | a684f92 |
-| r5 delta: T2 (TL-1 key, G3 bin E2E), T3 (G1 stamp, G4 guards), T5 (G2 schema, OE2 flag drop) | land via `/spb-plan-to-gc` after loop EXIT [U1..U6 per Task] | cpal-1mj | per parent Task | — |
+| r5/r6 delta: T1 (G5 `usageHost`), T2 (TL-1 key, G3 bin E2E), T3 (G1 stamp, G4 guards, G5 collision check), T4 (G5 README), T5 (G2 schema, OE2 flag drop) | land via `/spb-plan-to-gc` after loop EXIT [U1..U6 per Task] | cpal-1mj | per parent Task | — |
 
 ## Gate ledger (pre-loop history)
 | Plan rev | (a) covered | (b) simplest | @V |
