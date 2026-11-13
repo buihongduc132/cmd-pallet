@@ -28,6 +28,7 @@ const SELF = fileURLToPath(import.meta.url);
 const DEFAULT_DEBOUNCE_MIN = 10;
 const SYNC_LOCK_STALE_MS = 5 * 60_000;
 const GIT_TIMEOUT_MS = 60_000;
+const MAX_PUSH_ATTEMPTS = 3;
 const IN_PROGRESS = ["MERGE_HEAD", "rebase-merge", "rebase-apply", "CHERRY_PICK_HEAD", "BISECT_LOG"];
 
 type SpawnLike = (cmd: string, args: string[], opts: { detached: boolean; stdio: "ignore" }) => { unref(): void };
@@ -134,8 +135,13 @@ function checkoutBusy(repoDir: string): string | undefined {
   return undefined;
 }
 
-/** Steps 0–5; returns the outcome line. Throws on git failure (caller logs it). */
-function runSync(repoDir: string, now: Date, beforeMerge?: () => void): string {
+interface SyncHooks {
+  beforeMerge?: () => void;
+  beforePush?: () => void;
+}
+
+/** Steps 0–5; steps 3–5 retry when another host pushed first. Throws on git failure (caller logs it). */
+function runSync(repoDir: string, now: Date, hooks: SyncHooks = {}): string {
   // 0. guards
   const busy = checkoutBusy(repoDir);
   if (busy) return busy;
@@ -158,6 +164,16 @@ function runSync(repoDir: string, now: Date, beforeMerge?: () => void): string {
     }
   }
 
+  // 3–5. fetch → merge → push; a rejected push (another host pushed first) loops back to fetch
+  for (let attempt = 1; ; attempt++) {
+    const step = fetchMergePush(repoDir, committed, hooks);
+    if (step !== "retry") return step;
+    if (attempt >= MAX_PUSH_ATTEMPTS) return "stop: push failed";
+  }
+}
+
+/** One fetch → merge → push round. "retry" = push rejected; anything else is the final outcome. */
+function fetchMergePush(repoDir: string, committed: boolean, hooks: SyncHooks): string {
   // 3. fetch; never push someone else's unpushed non-usage work
   git(repoDir, ["fetch", "origin"]);
   const aheadPaths = git(repoDir, ["log", "@{u}..HEAD", "--format=", "--name-only"])
@@ -170,7 +186,7 @@ function runSync(repoDir: string, now: Date, beforeMerge?: () => void): string {
 
   // 4. merge upstream when behind
   if (Number(git(repoDir, ["rev-list", "--count", "HEAD..@{u}"])) > 0) {
-    beforeMerge?.();
+    hooks.beforeMerge?.();
     // the checkout is shared: someone may have started a merge/rebase or switched branch since step 0
     const busyNow = checkoutBusy(repoDir);
     if (busyNow) return busyNow;
@@ -187,12 +203,13 @@ function runSync(repoDir: string, now: Date, beforeMerge?: () => void): string {
 
   // 5. push
   if (Number(git(repoDir, ["rev-list", "--count", "@{u}..HEAD"])) === 0) return "ok: nothing to push";
-  if (!gitOk(repoDir, ["push", "origin", "main"])) return "stop: push failed";
+  hooks.beforePush?.();
+  if (!gitOk(repoDir, ["push", "origin", "main"])) return "retry";
   return committed ? "ok: committed + pushed" : "ok: pushed";
 }
 
 /** Commit + push usage/ in repoDir. Synchronous, never throws; returns the outcome line it logged. */
-export function syncUsage(repoDir: string, opts?: { now?: Date; beforeMerge?: () => void }): string {
+export function syncUsage(repoDir: string, opts?: { now?: Date } & SyncHooks): string {
   const now = opts?.now ?? new Date();
   const usageDir = join(repoDir, "usage");
   try {
@@ -206,7 +223,7 @@ export function syncUsage(repoDir: string, opts?: { now?: Date; beforeMerge?: ()
     outcome = "skip: sync locked";
   } else {
     try {
-      outcome = runSync(repoDir, now, opts?.beforeMerge);
+      outcome = runSync(repoDir, now, { beforeMerge: opts?.beforeMerge, beforePush: opts?.beforePush });
     } catch (err: any) {
       const first = String(err?.stderr || err?.message || err).trim().split("\n")[0];
       outcome = `stop: git failed (${first})`;
