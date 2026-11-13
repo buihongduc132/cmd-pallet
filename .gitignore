@@ -14,3 +14,9 @@ coverage
 # Gas City
 .beads/*
 !.beads/identity.toml
+
+# cmd-pallet usage store (runtime files; only usage/*.json are tracked)
+usage/.lock
+usage/*.tmp*
+usage/*.corrupt-*
+usage/.sync-*

@@ -7,6 +7,7 @@ import type { IoStreams } from "./types.ts";
 import { parseArgs } from "./flags.ts";
 import { getVerb } from "./verbs.ts";
 import { actionOf, recordUsage } from "./usage.ts";
+import { maybeSync } from "./usage-sync.ts";
 
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
@@ -28,12 +29,13 @@ export function recordInvocation(
     const known = verb !== undefined && getVerb(verb) !== undefined;
     const action = actionOf(verb, parsed.flags, known);
     const cmd = CMD_ACTIONS.has(action) ? usage?.cmd : undefined;
-    recordUsage({
-      dir: env.CMD_PALLET_USAGE_DIR || resolve(REPO_ROOT, "usage"),
-      host: hostname(),
-      action,
-      cmd,
-    });
+    const dir = env.CMD_PALLET_USAGE_DIR || resolve(REPO_ROOT, "usage");
+    recordUsage({ dir, host: hostname(), action, cmd });
+    const rawMin = env.CMD_PALLET_USAGE_SYNC_MIN?.trim();
+    const syncMin = rawMin ? Number(rawMin) : NaN;
+    // invalid / unset → maybeSync default (10 min)
+    const debounceMin = Number.isFinite(syncMin) && syncMin >= 0 ? syncMin : undefined;
+    maybeSync({ repoDir: REPO_ROOT, usageDir: dir, debounceMin });
   } catch {
     // usage bookkeeping must never affect the CLI
   }
