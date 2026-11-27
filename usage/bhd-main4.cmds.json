@@ -1,8 +1,23 @@
 {
   "bhd-main4": {
+    "disk-cleanup": {
+      "read": {
+        "2026-11-24T09": 1
+      }
+    },
+    "mesh-disk-audit": {
+      "read": {
+        "2026-11-24T09": 1
+      }
+    },
     "notes-capture": {
       "get": {
         "2026-11-13T18": 1
+      }
+    },
+    "ops-disk-cleanup": {
+      "run": {
+        "2026-11-24T09": 1
       }
     }
   }
